@@ -155,6 +155,12 @@ manage fleets of remote clusters.
    policy. The UI may resolve a current display name from AD for readability, but
    that mutable name is not persisted in AccessMapping.
 
+   The controller schedules a jittered directory refresh for every active managed
+   ServiceAccount (assumed every five minutes). It uses the exact username stored
+   on the ServiceAccount to re-resolve AD groups independently of credential
+   issuance. This makes group membership an actively reconciled input rather than
+   a snapshot captured in the kubeconfig.
+
 5. **Policy evaluator**
 
    A pure Go package takes an authenticated username, resolved AD group IDs,
@@ -411,6 +417,33 @@ cross-namespace binding cleanup and tolerate deleted Namespaces and other
    and returns a new token. Revocation deletes the ServiceAccount, invalidating
    all tokens attached to its identity.
 
+#### AD group membership changes
+
+ServiceAccount tokens identify the ServiceAccount; they do not contain this
+controller's AD group list or effective ClusterRole grants. Therefore a user does
+not need new credentials when AD membership changes:
+
+1. The controller periodically re-resolves AD groups for each non-expired managed
+   ServiceAccount using its username annotation. An authenticated request can
+   also enqueue an immediate refresh, but login or credential refresh is not
+   required for correctness.
+2. The shared evaluator recomputes every AccessMapping that matches the username
+   or current AD groups and compares the result with existing bindings.
+3. For newly added groups, the controller creates the newly required
+   RoleBindings/ClusterRoleBindings. For removed groups, it deletes bindings no
+   longer justified by any exact-username or remaining-group mapping.
+4. The controller updates directory freshness, policy digest, and credential
+   state annotations only after the binding changes converge.
+5. On the user's next API request, kube-apiserver evaluates the same existing
+   ServiceAccount token against the current bindings, so the new permissions take
+   effect without changing the kubeconfig.
+
+The normal propagation bound is the configured refresh interval plus LDAP and
+reconciliation latency. Refreshes are jittered and concurrency-limited to avoid
+an LDAP thundering herd. If LDAP is unavailable, additions are never inferred;
+previous group evidence follows the bounded-staleness and fail-closed removal
+rules below.
+
 #### Effective-access search
 
 Given a username, the admin-only search endpoint applies the same authentication
@@ -585,8 +618,9 @@ distributed under GNU Affero General Public License version 3 only
   concurrent updates, and restart idempotence.
 - Run kind tests against supported Kubernetes minor versions. Verify real RBAC
   using issued kubeconfigs, short token expiry, ServiceAccount revocation,
-  namespaced RoleBinding versus ClusterRoleBinding scope, leader failover,
-  controller restart, and clean uninstall.
+  AD group addition/removal taking effect with the same kubeconfig, namespaced
+  RoleBinding versus ClusterRoleBinding scope, leader failover, controller
+  restart, and clean uninstall.
 - Run a basic LDAP fixture and a distinct AD-compatible lane for stable IDs and
   nested groups; do not claim AD parity from OpenLDAP alone.
 - Exercise the end-to-end authentication boundary, including spoofed/ambiguous
