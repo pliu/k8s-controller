@@ -38,10 +38,10 @@ state store:
   exact usernames, AD groups, and ClusterRole names with their namespace lists.
   Any listed username, or a member of any listed group, receives every listed
   ClusterRole entry.
-- Create one managed ServiceAccount for each active credential identity in the
+- Create one managed ServiceAccount for each active exact username in the
   same namespace as the controller and service. The ServiceAccount's labels and
-  annotations are the credential lifecycle record, including principal,
-  requestor, expiry, renewal, directory freshness, and observed policy metadata.
+  annotations are the credential lifecycle record, including username,
+  requestor, expiry, extension, directory freshness, and observed policy metadata.
   A separate credential custom resource is not needed initially.
 - Reconcile namespace-scoped `RoleBinding` objects and, where explicitly
   requested, cluster-scoped `ClusterRoleBinding` objects from the effective
@@ -50,10 +50,11 @@ state store:
   API and construct kubeconfigs in memory. Tokens are never stored in a custom
   resource, application database, log, or long-lived token Secret. Deleting the
   ServiceAccount invalidates every token for that credential identity.
-- Put all request authentication behind an interface-based middleware layer.
-  The initial adapter trusts a properly isolated reverse-proxy header, while
-  other adapters can supply the same normalized principal without changing
-  policy evaluation or credential reconciliation.
+- Put request authentication behind middleware which produces exactly the
+  identity attributes supported by AccessMapping v1: one exact username and the
+  user's current stable AD group IDs. The initial implementation reads the
+  username from a properly isolated reverse-proxy header and resolves groups
+  from AD.
 
 Kubernetes remains the enforcement point on every API request. ClusterRole rule
 changes take effect immediately through existing bindings; mapping changes are
@@ -77,11 +78,13 @@ manage fleets of remote clusters.
 - Label every object managed by the system consistently so it can be filtered,
   audited, and cleaned up safely.
 - Issue short-lived kubeconfigs for managed ServiceAccounts and support
-  extension, renewal, and ServiceAccount-level revocation.
-- Provide an extensible authentication middleware boundary rather than coupling
-  policy and credential code to a specific identity mechanism.
+  ServiceAccount-lifecycle extension, credential refresh, and ServiceAccount-level
+  revocation.
+- Keep authentication behind middleware whose v1 output is an exact username and
+  AD group list, matching the AccessMapping inputs.
 - Provide an authenticated UI and API for ClusterRole and mapping CRUD,
-  effective-access search, credential issuance, renewal, and revocation.
+  effective-access search, credential issuance, lifecycle extension, credential
+  refresh, and revocation.
 - Remain correct across restarts, concurrent updates, directory outages, drift,
   and partial reconciliation.
 - Provide unit, API, reconciliation, and real-cluster integration coverage,
@@ -122,39 +125,38 @@ manage fleets of remote clusters.
 
 3. **Authentication middleware**
 
-   HTTP authentication is represented by a small interface:
+   HTTP authentication is represented by a small v1 interface:
 
    ```text
-   Authenticate(request) -> Principal | authentication error
+   Authenticate(request) -> Identity | authentication error
 
-   Principal:
-     Username          exact normalized policy key
-     StableID          optional immutable provider identity
-     Groups            optional provider-supplied stable group IDs
-     AuthenticatedAt   optional reauthentication time
-     Provider          provider identifier
-     Claims            minimal authorization-relevant metadata
+   Identity:
+     Username             exact AccessMapping username key
+     ADGroupIDs           current stable AD group IDs
+     ADGroupsResolvedAt   group observation time
+     ADGroupsValidUntil   group freshness deadline
+     ADGroupsState        Resolved or Unavailable
    ```
 
-   The initial `RemoteHeaderAuthenticator` reads a configurable header such as
-   `X-Remote-User` only after the request has crossed a verified proxy trust
-   boundary. Future built-in adapters can use OIDC, mTLS, LDAP authentication, or
-   another mechanism without changing the evaluator. The interface is a source
-   boundary, not permission to load arbitrary in-process Go plugins; supported
-   adapters are selected through configuration and tested as part of the binary.
+   The initial middleware reads a configurable header such as `X-Remote-User`
+   only after the request has crossed a verified proxy trust boundary, then uses
+   the AD resolver to populate `ADGroupIDs`. A directory outage can return the
+   authenticated username with group state `Unavailable`, allowing exact-user
+   policy to remain distinguishable from unknown group policy. No other mapping
+   attributes are part of the v1 contract.
 
 4. **Directory group resolver**
 
-   Group resolution is separate from request authentication. If the authenticator
-   does not provide authoritative groups, an LDAP resolver finds current
-   transitive AD membership over LDAPS (or verified StartTLS). It uses a mounted
-   read-only bind credential, escaped queries, bounded connection/query timeouts,
-   result limits, pooling, and a short cache. Stable group IDs (preferably object
-   GUIDs or canonical DNs) are policy keys; display names are UI metadata.
+   An LDAP resolver used by the authentication middleware and controller finds
+   current transitive AD membership over LDAPS (or verified StartTLS). It uses a
+   mounted read-only bind credential, escaped queries, bounded connection/query
+   timeouts, result limits, pooling, and a short cache. Stable group IDs
+   (preferably object GUIDs or canonical DNs) are policy keys; display names are
+   UI metadata.
 
 5. **Policy evaluator**
 
-   A pure Go package takes a normalized Principal, resolved group IDs,
+   A pure Go package takes an authenticated username, resolved AD group IDs,
    AccessMappings, and current ClusterRoles and returns the additive,
    de-duplicated set of `(ClusterRole, binding scope)` grants. It also returns
    mapping provenance and invalid-reference information. The controller, search
@@ -168,25 +170,42 @@ manage fleets of remote clusters.
    credential operations. Kubernetes `resourceVersion` provides optimistic
    concurrency; `kubectl` changes appear through the same source of truth.
 
-   Route authorization consumes the normalized Principal rather than reading a
-   header directly. Policy mutation requires a configured administrator identity
-   or group. Credential endpoints always operate on the authenticated principal
+   Route authorization consumes the middleware Identity rather than reading a
+   header directly. Policy mutation requires a configured administrator username
+   or AD group. Credential endpoints always operate on the authenticated username
    and cannot accept a request-body username override.
 
 7. **Credential issuer**
 
-   The API creates or renews the principal's managed ServiceAccount, then waits
+   The API creates or extends the username's managed ServiceAccount, then waits
    for the controller to observe the exact request revision and converge its
-   bindings. It calls the ServiceAccount `token` subresource with the Kubernetes
-   API audience and an expiration no later than either the configured maximum or
-   the ServiceAccount lifecycle expiry. It constructs a kubeconfig using a
-   trusted API endpoint and CA bundle and returns it over TLS with
-   `Cache-Control: no-store`.
+   bindings. On initial issuance or an explicit credential refresh, it calls the
+   ServiceAccount `token` subresource with the Kubernetes API audience and an
+   expiration no later than either the configured maximum or the ServiceAccount
+   lifecycle expiry. It constructs a kubeconfig using a trusted API endpoint and
+   CA bundle and returns it over TLS with `Cache-Control: no-store`.
 
    Token and complete kubeconfig bytes exist only in request memory and are
-   redacted from logs and traces. There is no per-token session object. Normal
-   renewal can briefly leave an older token usable until its own short expiry;
-   deleting and recreating the ServiceAccount is the hard-revocation operation.
+   redacted from logs and traces. There is no per-token session object.
+
+   A ServiceAccount and its bearer token are different objects. A token returned
+   by `TokenRequest` is a signed JWT with an immutable expiration claim; changing
+   this controller's `expires-at` annotation on the ServiceAccount does not alter
+   that JWT. Extending ServiceAccount lifetime therefore keeps the identity and
+   bindings alive but does not extend an already downloaded kubeconfig. Once its
+   token expires, the client needs a new TokenRequest result and thus an updated
+   kubeconfig token (or a future exec credential helper that refreshes it). This
+   follows the Kubernetes recommendation to use
+   [short-lived TokenRequest credentials](https://kubernetes.io/docs/concepts/security/service-accounts/#manually-retrieve-service-account-credentials)
+   rather than permanent ServiceAccount token Secrets.
+
+   A refresh requested before the old token expires can cause temporary overlap,
+   but overlap is not required by the data model and is not tracked. Waiting for
+   expiry avoids overlap at the cost of an interruption. Deleting and recreating
+   the ServiceAccount is the hard-revocation operation. Keeping one kubeconfig
+   token unchanged until ServiceAccount deletion would instead require a legacy
+   non-expiring ServiceAccount token Secret, which Kubernetes supports but does
+   not recommend for external clients.
 
 8. **Deployment resources**
 
@@ -273,21 +292,18 @@ finalizer would delay deletion but cannot serve as a durable copy of the rules.
 
 ### ServiceAccount lifecycle model
 
-One managed ServiceAccount per stable principal identity is the initial model.
-If the authenticator has no immutable ID, the exact provider-qualified username
-is the identity key. Its deterministic name is a readable prefix plus a hash,
-and it is always created in the installation namespace.
+One managed ServiceAccount per exact username is the initial model. Its
+deterministic name is a readable prefix plus a username hash, and it is always
+created in the installation namespace.
 
 The ServiceAccount is the lifecycle record. The API/controller maintain these
 annotations (names illustrative but stable once the API is implemented):
 
 ```text
 rbac.pliu.dev/principal-username=<exact normalized username>
-rbac.pliu.dev/principal-id=<optional provider-stable ID>
-rbac.pliu.dev/identity-provider=<provider name>
 rbac.pliu.dev/requested-by=<authenticated requestor ID>
 rbac.pliu.dev/requested-at=<RFC3339 timestamp>
-rbac.pliu.dev/last-renewed-at=<RFC3339 timestamp>
+rbac.pliu.dev/last-extended-at=<RFC3339 timestamp>
 rbac.pliu.dev/expires-at=<RFC3339 timestamp>
 rbac.pliu.dev/request-revision=<opaque API-generated revision>
 rbac.pliu.dev/observed-request-revision=<controller-observed revision>
@@ -310,10 +326,13 @@ revision matches the requested revision, state is `Ready`, directory evidence is
 sufficiently fresh, and the policy digest still matches the evaluator's current
 view.
 
-Renewal updates `last-renewed-at`, `expires-at`, and `request-revision`, waits for
-reconciliation, and returns a new short-lived kubeconfig. Renewal extends the
-ServiceAccount's lifecycle but cannot extend a token already issued by the API.
-Old and new tokens may overlap until the old token expires.
+Lifecycle extension updates `last-extended-at`, `expires-at`, and
+`request-revision`, then waits for reconciliation. It does not return a new
+kubeconfig and does not alter any token already issued. Credential refresh is a
+separate operation that returns a kubeconfig with a newly issued short-lived
+token. If refresh happens before the old token expires, the two tokens overlap;
+if it happens after expiry, there is no overlap but the old kubeconfig has an
+interruption.
 
 Expiry, explicit revocation, confirmed directory deletion, or deletion of the
 ServiceAccount starts cleanup. A ServiceAccount finalizer lets the controller
@@ -353,8 +372,9 @@ cross-namespace binding cleanup and tolerate deleted Namespaces and other
 
 #### ClusterRole and mapping administration
 
-1. The authentication middleware produces a Principal. Route authorization
-   verifies configured policy-administrator identity or group membership.
+1. The authentication middleware produces an Identity containing the exact
+   username and current AD group IDs. Route authorization verifies a configured
+   policy-administrator username or AD group.
 2. An administrator creates or edits a managed ClusterRole or AccessMapping
    through the UI/API (or applies an AccessMapping directly with `kubectl`).
 3. Kubernetes schema validation rejects malformed mappings. The controller
@@ -368,13 +388,13 @@ cross-namespace binding cleanup and tolerate deleted Namespaces and other
 6. Status, observation annotations, Events, metrics, and audit logs show
    convergence or a precise error.
 
-#### Credential issuance and renewal
+#### Credential issuance, extension, and refresh
 
-1. The configured authentication adapter authenticates the request and returns a
-   Principal. For the initial header adapter, a hardened reverse proxy replaces
-   inbound identity headers and is the only network peer allowed to reach the API.
-2. The API validates the Principal and resolves current AD groups if they were
-   not authoritatively supplied by the authentication adapter.
+1. The authentication middleware returns an Identity with the exact username and
+   current AD group IDs. For the initial implementation, a hardened reverse proxy
+   replaces inbound username headers and is the only network peer allowed to
+   reach the API; the middleware resolves AD groups before returning.
+2. The API validates the Identity and its AD group freshness state.
 3. It creates or extends the deterministic ServiceAccount in the installation
    namespace, records lifecycle/request metadata, and waits for the controller to
    observe that exact request revision.
@@ -386,8 +406,10 @@ cross-namespace binding cleanup and tolerate deleted Namespaces and other
 6. `kubectl` presents the token to kube-apiserver. Kubernetes authenticates the
    ServiceAccount and evaluates the current ClusterRole rules and bindings on
    every request.
-7. Renewal repeats steps 2–5 and may extend ServiceAccount expiry. Revocation
-   deletes the ServiceAccount, invalidating all tokens attached to its identity.
+7. Lifecycle extension repeats steps 2–4 and may move ServiceAccount expiry
+   forward without changing the kubeconfig. Credential refresh repeats step 5
+   and returns a new token. Revocation deletes the ServiceAccount, invalidating
+   all tokens attached to its identity.
 
 #### Effective-access search
 
@@ -439,10 +461,10 @@ as current without its freshness timestamp.
 
 ### Security and privacy
 
-- Each authenticator documents its trust boundary. The header adapter strips or
-  rejects ambiguous/multiple headers at the edge, denies direct API access, and
-  uses TLS or mTLS from proxy to service. Other adapters must produce the same
-  tested Principal invariants.
+- The authentication middleware documents its trust boundary. The header input
+  strips or rejects ambiguous/multiple headers at the edge, denies direct API
+  access, and uses TLS or mTLS from proxy to service. All implementations must
+  return the same tested username and AD-group invariants.
 - Directory connections require certificate validation. Read-only bind
   credentials are supplied from an externally managed Secret and mounted only
   into processes that query LDAP.
@@ -460,18 +482,19 @@ as current without its freshness timestamp.
   and NetworkPolicy restricts access to the service.
 - Browser mutations use CSRF protection, same-site secure cookies where
   applicable, a restrictive Content Security Policy, and request-size limits.
-- Audit policy mutations, effective-grant changes, issuance, renewal, and
-  revocation with actor, source UID, request ID, and timestamps, but never token
-  or kubeconfig bytes. Usernames are excluded from metric labels and may be
-  hashed or redacted in logs.
+- Audit policy mutations, effective-grant changes, issuance, lifecycle extension,
+  credential refresh, and revocation with actor, source UID, request ID, and
+  timestamps, but never token or kubeconfig bytes. Usernames are excluded from
+  metric labels and may be hashed or redacted in logs.
 
 ### Observability
 
 Expose Prometheus metrics for reconcile duration/errors/requeues, mapping
 readiness, managed-object drift, policy convergence lag, active/expired
-ServiceAccounts, issuance/renewal/revocation outcomes, directory latency/cache/
-failure, and leader status. Emit structured JSON logs with resource/request
-correlation IDs and Kubernetes Events for actionable resource failures. Provide
+ServiceAccounts, issuance/extension/refresh/revocation outcomes, directory
+latency/cache/failure, and leader status. Emit structured JSON logs with
+resource/request correlation IDs and Kubernetes Events for actionable resource
+failures. Provide
 `/livez`, `/readyz`, and dependency status. Alert on sustained reconciliation
 errors, policy lag, directory staleness approaching its bound, TokenRequest
 failure, and absence of an elected leader.
@@ -488,8 +511,9 @@ failure, and absence of an elected leader.
   actual authentication identity, without a second credential object.
 - **TokenRequest:** expiring credentials without persisted bearer-token material.
   Legacy permanent ServiceAccount token Secrets are unsupported.
-- **Authentication and group-resolution interfaces:** provider-specific trust and
-  directory behavior stay outside policy evaluation and reconciliation.
+- **Username-and-AD-group authentication contract:** the middleware produces
+  exactly the identity attributes understood by AccessMapping v1, keeping HTTP
+  trust and directory behavior outside policy evaluation and reconciliation.
 - **Go HTTP API plus React/TypeScript/Vite UI:** typed backend integration and a
   maintainable role editor/search experience; compiled assets are embedded into
   the API image.
@@ -516,7 +540,7 @@ failure, and absence of an elected leader.
 │   ├── samples/                  # safe ClusterRole/AccessMapping examples
 │   └── kind/                     # development/integration overlays
 ├── internal/
-│   ├── authn/                    # Principal and authentication adapters
+│   ├── authn/                    # username/AD-group middleware contract
 │   ├── controller/               # mapping, SA, and binding reconcilers
 │   ├── credentials/              # SA lifecycle, TokenRequest, revocation
 │   ├── directory/                # group resolver, AD implementation, cache
@@ -530,9 +554,9 @@ failure, and absence of an elected leader.
 │   ├── envtest/                  # reconciliation integration tests
 │   ├── kind/                     # real-cluster and HA/failure tests
 │   ├── ldap/                     # disposable directory fixtures
-│   └── e2e/                      # authenticator → kubeconfig → API server
+│   └── e2e/                      # auth middleware → kubeconfig → API server
 ├── charts/rbac-controller/       # packaging after manifests stabilize
-├── docs/                         # API, operations, auth adapters, threat model
+├── docs/                         # API, operations, auth middleware, threat model
 ├── hack/                         # generation, verification, kind helpers
 ├── DESIGN.md
 ├── LICENSE                       # GNU AGPL v3 text
@@ -553,10 +577,10 @@ distributed under GNU Affero General Public License version 3 only
 
 - Unit-test exact username/group matching, additive/de-duplicated evaluation,
   grant normalization, naming, lifecycle clocks, LDAP escaping, authentication
-  adapter invariants, kubeconfig construction, and token redaction. Use a fake
+  middleware invariants, kubeconfig construction, and token redaction. Use a fake
   clock and fuzz/property tests for mapping input.
 - Use controller-runtime envtest for mapping create/update/delete, missing
-  references, ServiceAccount create/renew/expire/delete, finalizers, observation
+  references, ServiceAccount create/extend/expire/delete, finalizers, observation
   revisions, indexes, binding drift, ownership collision, namespace deletion,
   concurrent updates, and restart idempotence.
 - Run kind tests against supported Kubernetes minor versions. Verify real RBAC
@@ -566,7 +590,7 @@ distributed under GNU Affero General Public License version 3 only
 - Run a basic LDAP fixture and a distinct AD-compatible lane for stable IDs and
   nested groups; do not claim AD parity from OpenLDAP alone.
 - Exercise the end-to-end authentication boundary, including spoofed/ambiguous
-  headers, adapter errors, route authorization, CSRF, directory outage/staleness,
+  headers, middleware errors, route authorization, CSRF, directory outage/staleness,
   policy-change races, cache-control, and log scanning for token leakage.
 - Scale-test users × mappings × namespaces, API object counts, reconciliation
   latency, directory load, and kube-apiserver throttling before beta.
@@ -585,18 +609,19 @@ release.
 ### 0. Resolve semantics and threat model
 
 - Resolve the clarifying questions below.
-- Specify the Principal contract, authentication adapter trust requirements,
+- Specify the Identity contract, authentication middleware trust requirements,
   ServiceAccount lifecycle state machine, mapping API conventions, and SLOs.
 - Define the Kubernetes compatibility matrix and AGPL-3.0-only policy.
 
 Exit criterion: reviewers agree on mapping shape, binding scopes, authentication,
-ClusterRole ownership, credential renewal/revocation, and directory behavior.
+ClusterRole ownership, credential extension/refresh/revocation, and directory
+behavior.
 
 ### 1. Scaffold AccessMapping and policy evaluation
 
 - Initialize Go/Kubebuilder, license files, generation, linting, and CI.
 - Define the AccessMapping schema, status, validation, and safe samples.
-- Implement and test Principal, evaluator, provenance, normalization, naming,
+- Implement and test Identity, evaluator, provenance, normalization, naming,
   labels, digests, and ownership checks.
 
 Exit criterion: the CRD installs cleanly and fixture mappings produce stable,
@@ -614,28 +639,30 @@ explainable grants without issuing credentials.
 Exit criterion: binding and credential desired state converges after create,
 update, delete, drift, restart, and partial failures without orphaned access.
 
-### 3. Authentication abstraction and directory groups
+### 3. Username and AD-group authentication
 
-- Implement the Principal/authenticator middleware contract and hardened remote
-  header adapter.
+- Implement middleware that authenticates an exact remote-header username and
+  returns its resolved stable AD group IDs.
 - Add TLS-only AD group resolution, stable identity/group handling, nested groups,
   timeouts/cache, and bounded-staleness behavior.
-- Add fake-authenticator, fake-directory, OpenLDAP, and AD-compatible tests.
+- Add fake-middleware, fake-directory, OpenLDAP, and AD-compatible tests.
 
-Exit criterion: adapters cannot bypass Principal invariants, and exact-user and
-group changes converge within documented bounds.
+Exit criterion: middleware cannot bypass username/group invariants, and exact-user
+and group changes converge within documented bounds.
 
-### 4. Secure issuance and renewal
+### 4. Secure issuance, lifecycle extension, and credential refresh
 
 - Implement ServiceAccount create/extend/revoke APIs, request/observation revision
   handshake, TokenRequest, in-memory kubeconfig construction, and redaction.
 - Split API/controller permissions and add hardened manifests/NetworkPolicies.
-- Complete authentication-to-kube-apiserver kind tests, including overlapping
-  renewal tokens and hard revocation through ServiceAccount deletion.
+- Complete authentication-to-kube-apiserver kind tests, including the distinction
+  between ServiceAccount extension and token refresh, optional token overlap, and
+  hard revocation through ServiceAccount deletion.
 
 Exit criterion: an authenticated user can obtain only their current effective
-permissions, extend expiry, renew a kubeconfig, and revoke every outstanding
-credential by deleting the managed ServiceAccount.
+permissions, extend ServiceAccount expiry, refresh an expired or expiring
+kubeconfig, and revoke every outstanding credential by deleting the managed
+ServiceAccount.
 
 ### 5. ClusterRole/mapping UI and search
 
@@ -643,7 +670,8 @@ credential by deleting the managed ServiceAccount.
   warnings, reference checks, and optimistic concurrency.
 - Add desired-versus-observed username search with grant provenance and explicit
   unknown directory state.
-- Add self-service credential state, renewal, and revocation views.
+- Add self-service credential state, lifecycle extension, credential refresh, and
+  revocation views.
 - Complete accessibility, browser security, and UI tests.
 
 Exit criterion: routine role, mapping, and credential operations require no
@@ -653,8 +681,8 @@ hidden state, and every managed effective grant can be explained.
 
 - Establish dashboards/alerts, load limits, disruption/failover tests,
   backup/restore and upgrade/rollback procedures, and security review.
-- Test supported Kubernetes and auth-adapter combinations, AD variants, scale
-  targets, and dependency/image/license scanning.
+- Test supported Kubernetes and authentication-middleware configurations, AD
+  variants, scale targets, and dependency/image/license scanning.
 - Add Helm packaging after manifests and APIs stabilize. Consider an exec
   credential helper only after non-browser reauthentication is settled.
 
@@ -666,14 +694,14 @@ reviewed threat model support a beta release.
 These are ordered roughly by how much the answers could change the design.
 Implementation can proceed with the stated assumptions if no answer is given.
 
-1. **Which authentication adapters must the first release ship, and must third
-   parties add adapters without rebuilding the binary?**
+1. **What exact username header and AD lookup configuration are authoritative?**
 
-   Assumption: v1 ships the trusted remote-header adapter, with provider-neutral
-   Principal/middleware interfaces that can support built-in OIDC, mTLS, or LDAP
-   adapters later. Runtime-loaded Go plugins are not required. Browser download
-   is sufficient initially; a CLI exec helper waits for an approved non-browser
-   reauthentication flow.
+   Assumption: v1 middleware authenticates the exact username from a trusted
+   configurable remote header and returns transitive AD group IDs resolved over
+   LDAP. Those are the only two identity attributes AccessMapping consumes.
+   Runtime-loaded authentication plugins and additional mapping attributes are
+   not required. Browser download is sufficient initially; a CLI exec helper
+   waits for an approved non-browser reauthentication flow.
 
 2. **Must a deleted managed ClusterRole be automatically reconstructed?**
 
@@ -705,17 +733,20 @@ Implementation can proceed with the stated assumptions if no answer is given.
    forest boundaries, disabled-user handling, and nested-group query strategy are
    explicit deployment configuration.
 
-6. **Does “one credential per user” permit two short-lived tokens to overlap
-   during renewal?**
+6. **Must one downloaded kubeconfig remain unchanged for the entire, extendable
+   ServiceAccount lifetime?**
 
-   Assumption: yes. One managed ServiceAccount exists per user and session objects
-   are not tracked. Renewal extends its lifecycle and issues a new token; the old
-   token remains usable until its short expiration. Strict single-token rotation
-   would require deleting/recreating the ServiceAccount on every renewal or
-   reintroducing per-token bound revocation objects.
+   Assumption: no; v1 retains short-lived TokenRequest credentials. Extending the
+   ServiceAccount changes only the controller-managed deletion deadline. It cannot
+   change the immutable expiration in an already issued JWT, so a client whose
+   token expires must refresh the kubeconfig token. Refreshing early can briefly
+   overlap tokens; refreshing after expiry avoids overlap. If an unchanged static
+   kubeconfig is required, the design must explicitly accept a legacy non-expiring
+   ServiceAccount token Secret and its larger bearer-token risk, or add an exec
+   credential helper that refreshes tokens transparently.
 
-7. **What are the expiry, renewal, inactivity, directory-staleness, and
-   availability targets?**
+7. **What are the token expiry, ServiceAccount extension, inactivity,
+   directory-staleness, and availability targets?**
 
    Assumption: tokens last at most one hour, a ServiceAccount is initially valid
    for eight hours and may be extended after current authentication, active group
