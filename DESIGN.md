@@ -151,8 +151,9 @@ manage fleets of remote clusters.
    current transitive AD membership over LDAPS (or verified StartTLS). It uses a
    mounted read-only bind credential, escaped queries, bounded connection/query
    timeouts, result limits, pooling, and a short cache. Stable group IDs
-   (preferably object GUIDs or canonical DNs) are policy keys; display names are
-   UI metadata.
+   (preferably object GUIDs or canonical DNs) are the only group values stored in
+   policy. The UI may resolve a current display name from AD for readability, but
+   that mutable name is not persisted in AccessMapping.
 
 5. **Policy evaluator**
 
@@ -233,8 +234,7 @@ spec:
     - alice@example.com
     - bob@example.com
   adGroups:
-    - id: 6f9619ff-8b86-d011-b42d-00c04fc964ff
-      displayName: Team A Developers
+    - 6f9619ff-8b86-d011-b42d-00c04fc964ff
   clusterRoles:
     - name: application-reader
       namespaces: [team-a, team-a-staging]
