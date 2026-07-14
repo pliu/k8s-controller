@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: pod-reader, labels: {app.kubernetes.io/managed-by: rbac-controller}}
+rules: [{apiGroups: [""], resources: [pods], verbs: [get, list, watch]}]
+---
+apiVersion: rbac.pliu.dev/v1alpha1
+kind: AccessMapping
+metadata: {name: team-readers}
+spec:
+  usernames: [alice@example.com]
+  adGroups: [6f9619ff-8b86-d011-b42d-00c04fc964ff]
+  clusterRoles: [{name: pod-reader, namespaces: [team-a]}]
