@@ -6,11 +6,11 @@ import (
 	"encoding/hex"
 )
 
-const ManagedBy = "rbac-controller"
+const ManagedBy = "k8s-controller"
 const LabelManagedBy = "app.kubernetes.io/managed-by"
-const LabelOwnerUID = "rbac.pliu.dev/owner-uid"
-const LabelOwnerName = "rbac.pliu.dev/owner-name"
-const Finalizer = "rbac.pliu.dev/binding-cleanup"
+const LabelOwnerUID = "k8s.pliu.dev/owner-uid"
+const LabelOwnerName = "k8s.pliu.dev/owner-name"
+const Finalizer = "k8s.pliu.dev/binding-cleanup"
 
 func Hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 

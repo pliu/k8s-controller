@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // +kubebuilder:object:generate=true
-// +groupName=rbac.pliu.dev
+// +groupName=k8s.pliu.dev
 package v1alpha1
 
 import (
@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-var GroupVersion = schema.GroupVersion{Group: "rbac.pliu.dev", Version: "v1alpha1"}
+var GroupVersion = schema.GroupVersion{Group: "k8s.pliu.dev", Version: "v1alpha1"}
 var SchemeBuilder = runtime.NewSchemeBuilder(func(s *runtime.Scheme) error {
 	s.AddKnownTypes(GroupVersion, &AccessMapping{}, &AccessMappingList{})
 	metav1.AddToGroupVersion(s, GroupVersion)

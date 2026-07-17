@@ -3,7 +3,7 @@ kind: ClusterRole
 metadata: {name: pod-reader}
 rules: [{apiGroups: [""], resources: [pods], verbs: [get, list, watch]}]
 ---
-apiVersion: rbac.pliu.dev/v1alpha1
+apiVersion: k8s.pliu.dev/v1alpha1
 kind: AccessMapping
 metadata: {name: team-readers}
 spec:

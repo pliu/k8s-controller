@@ -1,6 +1,6 @@
-# RBAC Controller
+# k8s-controller
 
-RBAC Controller maps exact usernames and groups to reusable ClusterRoles by
+k8s-controller maps exact usernames and groups to reusable ClusterRoles by
 reconciling native Kubernetes bindings from an `AccessMapping` custom resource.
 
 Each `AccessMapping` entry produces namespace `RoleBinding`s or explicit

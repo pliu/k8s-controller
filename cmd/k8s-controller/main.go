@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	api "github.com/pliu/rbac-controller/api/v1alpha1"
-	c "github.com/pliu/rbac-controller/internal/controller"
-	s "github.com/pliu/rbac-controller/internal/server"
+	api "github.com/pliu/k8s-controller/api/v1alpha1"
+	c "github.com/pliu/k8s-controller/internal/controller"
+	s "github.com/pliu/k8s-controller/internal/server"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -42,7 +42,7 @@ func main() {
 		return
 	}
 
-	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "rbac-controller.rbac.pliu.dev", HealthProbeBindAddress: ":8081"})
+	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081"})
 	if e != nil {
 		panic(e)
 	}

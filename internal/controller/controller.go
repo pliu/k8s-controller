@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 
-	api "github.com/pliu/rbac-controller/api/v1alpha1"
-	"github.com/pliu/rbac-controller/internal/core"
+	api "github.com/pliu/k8s-controller/api/v1alpha1"
+	"github.com/pliu/k8s-controller/internal/core"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"

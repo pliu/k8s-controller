@@ -1,4 +1,4 @@
-module github.com/pliu/rbac-controller
+module github.com/pliu/k8s-controller
 
 go 1.24.0
 

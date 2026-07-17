@@ -4,7 +4,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	api "github.com/pliu/rbac-controller/api/v1alpha1"
+	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"net/http"
@@ -71,9 +71,9 @@ func respond(w http.ResponseWriter, v any, e error) {
 }
 func index(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprint(w, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>RBAC Controller</title><style>
+	fmt.Fprint(w, `<!doctype html><html><head><meta name="viewport" content="width=device-width"><title>k8s-controller</title><style>
 body{font:15px system-ui;margin:2rem auto;max-width:1000px;padding:0 1rem;color:#17202a}section{border:1px solid #ccd1d1;border-radius:8px;padding:1rem;margin:1rem 0}pre{box-sizing:border-box;width:100%;padding:.6rem;background:#f4f6f7;white-space:pre-wrap;max-height:28rem;overflow:auto}button{padding:.55rem .9rem;margin:.4rem .3rem .4rem 0}.row{display:grid;grid-template-columns:1fr 1fr;gap:1rem}@media(max-width:700px){.row{display:block}}</style></head><body>
-<h1>RBAC Controller</h1><p>Read-only view of the AccessMappings and the ClusterRoles they reference. Author policy with <code>kubectl</code> or GitOps.</p>
+<h1>k8s-controller</h1><p>Read-only view of the AccessMappings and the ClusterRoles they reference. Author policy with <code>kubectl</code> or GitOps.</p>
 <div class="row"><section><h2>Referenced ClusterRoles</h2><button onclick="load('/api/v1/clusterroles','roles')">Refresh</button><pre id="roles"></pre></section><section><h2>AccessMappings</h2><button onclick="load('/api/v1/accessmappings','maps')">Refresh</button><pre id="maps"></pre></section></div>
 <script>
 const out=(id,v)=>document.getElementById(id).textContent=typeof v==='string'?v:JSON.stringify(v,null,2);
