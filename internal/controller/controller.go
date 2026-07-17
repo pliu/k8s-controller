@@ -220,7 +220,13 @@ func (r *Reconciler) status(ctx context.Context, mns *api.ManagedNamespace, inva
 }
 
 func (r *Reconciler) labels(mns *api.ManagedNamespace) map[string]string {
-	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(mns.UID), core.LabelOwnerName: mns.Name}
+	return ownerLabels(mns.UID, mns.Name)
+}
+
+// ownerLabels stamp a generated object with its owning custom resource so drift
+// can be detected and stale objects cleaned up without adopting anything else.
+func ownerLabels(uid types.UID, name string) map[string]string {
+	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
 }
 
 func (r *Reconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {

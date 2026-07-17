@@ -33,6 +33,13 @@ done
 kubectl -n team-a get rolebinding -l "k8s.pliu.dev/owner-name=team-a" -o name | grep -q rolebinding
 kubectl -n team-a get resourcequota -l "k8s.pliu.dev/owner-name=team-a" -o name | grep -q resourcequota
 
+# The ClusterAccessMapping reconciles into a cluster-wide ClusterRoleBinding.
+for _ in {1..30}; do
+  kubectl get clusterrolebinding -l "k8s.pliu.dev/owner-name=cluster-pod-readers" -o name | grep -q clusterrolebinding && break
+  sleep 1
+done
+kubectl get clusterrolebinding -l "k8s.pliu.dev/owner-name=cluster-pod-readers" -o name | grep -q clusterrolebinding
+
 kubectl -n k8s-controller port-forward service/k8s-controller 18080:80 >"${TMPDIR:-/tmp}/k8s-controller-port-forward.log" 2>&1 &
 forward_pid=$!
 for _ in {1..30}; do

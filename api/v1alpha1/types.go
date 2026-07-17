@@ -12,14 +12,15 @@ import (
 
 var GroupVersion = schema.GroupVersion{Group: "k8s.pliu.dev", Version: "v1alpha1"}
 var SchemeBuilder = runtime.NewSchemeBuilder(func(s *runtime.Scheme) error {
-	s.AddKnownTypes(GroupVersion, &ManagedNamespace{}, &ManagedNamespaceList{})
+	s.AddKnownTypes(GroupVersion, &ManagedNamespace{}, &ManagedNamespaceList{}, &ClusterAccessMapping{}, &ClusterAccessMappingList{})
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil
 })
 var AddToScheme = SchemeBuilder.AddToScheme
 
-// AccessMapping grants a single group OR a list of users a set of ClusterRoles
-// within the managed namespace. Exactly one of group or users is set.
+// AccessMapping grants a single group OR a list of users a set of ClusterRoles.
+// It is namespace-scoped as an entry in a ManagedNamespace, and cluster-wide as
+// the spec of a ClusterAccessMapping. Exactly one of group or users is set.
 // +kubebuilder:validation:XValidation:rule="(has(self.group) && size(self.group) > 0) != (has(self.users) && size(self.users) > 0)",message="set exactly one of group or users"
 type AccessMapping struct {
 	Group string   `json:"group,omitempty"`
@@ -69,4 +70,30 @@ type ManagedNamespaceList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ManagedNamespace `json:"items"`
+}
+
+type ClusterAccessMappingStatus struct {
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
+	InvalidReferences  []InvalidReference `json:"invalidReferences,omitempty"`
+}
+
+// ClusterAccessMapping binds a single group OR a list of users to a set of
+// ClusterRoles cluster-wide, via ClusterRoleBindings. Its spec is an
+// AccessMapping evaluated without a namespace.
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster,shortName=cam
+// +kubebuilder:subresource:status
+type ClusterAccessMapping struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              AccessMapping              `json:"spec"`
+	Status            ClusterAccessMappingStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type ClusterAccessMappingList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ClusterAccessMapping `json:"items"`
 }

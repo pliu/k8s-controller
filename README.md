@@ -17,6 +17,11 @@ a set of ClusterRoles. The operator keeps three things in sync:
   with the group or users as `User`/`Group` subjects bound directly, so
   Kubernetes evaluates them against the authenticated identity on every request.
 
+For cluster-wide grants, a `ClusterAccessMapping` is a cluster-scoped resource
+whose spec is the same access mapping (a single **group** or a list of **users**
+→ ClusterRoles). The operator reconciles one `ClusterRoleBinding` per referenced
+ClusterRole, granting that access across every namespace.
+
 ClusterRoles are not managed by this operator. A mapping may reference any
 existing ClusterRole; the reusable ones you intend to grant should be installed
 alongside the operator (ideally in the same chart/manifests) so they version
@@ -35,13 +40,19 @@ kubectl apply -f config/sample.yaml
 The image ships one binary. It runs both the reconciler and the HTTP API by
 default; pass `-controller` or `-server` to run only one. The default manifests
 deploy the combined mode, with the reconciler under leader election and the API
-served by every replica.
+served by every replica. Reconciliation is watch-driven; `-sync-period` (default
+`1h`) sets how often every `ManagedNamespace` is re-synced as a drift-repair
+safety net.
 
-The server exposes `GET /api/v1/managednamespaces` and `GET /api/v1/clusterroles`
-(the ClusterRoles referenced by mappings) plus an embedded UI that lists both. It
-performs no writes and no authentication; restrict access to it with a
-NetworkPolicy or an authenticating proxy as your environment requires. The
-`group` values in a `ManagedNamespace` must match the stable group identifiers
+The server exposes `GET /api/v1/managednamespaces` and
+`GET /api/v1/clusteraccessmappings` plus an embedded UI (`internal/server/ui`)
+with three views: a **Namespaces** list where selecting a namespace shows its
+ResourceQuota and permission mappings (users/groups → ClusterRoles), a **Cluster
+access** view listing the cluster-wide mappings, and a **Search** view that,
+given a username or group, lists the namespaces (and any cluster-wide scope) and
+ClusterRoles they are granted. It performs no writes and no authentication;
+restrict access to it with a NetworkPolicy or an authenticating proxy as your
+environment requires. The `group` values must match the stable group identifiers
 your cluster's authenticator asserts to kube-apiserver.
 
 The project is licensed under GNU AGPL version 3 only.

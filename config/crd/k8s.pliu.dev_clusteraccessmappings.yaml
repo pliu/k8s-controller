@@ -4,21 +4,25 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: managednamespaces.k8s.pliu.dev
+  name: clusteraccessmappings.k8s.pliu.dev
 spec:
   group: k8s.pliu.dev
   names:
-    kind: ManagedNamespace
-    listKind: ManagedNamespaceList
-    plural: managednamespaces
+    kind: ClusterAccessMapping
+    listKind: ClusterAccessMappingList
+    plural: clusteraccessmappings
     shortNames:
-    - mns
-    singular: managednamespace
+    - cam
+    singular: clusteraccessmapping
   scope: Cluster
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
+        description: |-
+          ClusterAccessMapping binds a single group OR a list of users to a set of
+          ClusterRoles cluster-wide, via ClusterRoleBindings. Its spec is an
+          AccessMapping evaluated without a namespace.
         properties:
           apiVersion:
             description: |-
@@ -39,53 +43,28 @@ spec:
             type: object
           spec:
             description: |-
-              ManagedNamespaceSpec configures the namespace named by metadata.name. The
-              resource's own name is the namespace name, so there is exactly one
-              ManagedNamespace per namespace.
+              AccessMapping grants a single group OR a list of users a set of ClusterRoles.
+              It is namespace-scoped as an entry in a ManagedNamespace, and cluster-wide as
+              the spec of a ClusterAccessMapping. Exactly one of group or users is set.
             properties:
-              accessMappings:
+              clusterRoles:
                 items:
-                  description: |-
-                    AccessMapping grants a single group OR a list of users a set of ClusterRoles.
-                    It is namespace-scoped as an entry in a ManagedNamespace, and cluster-wide as
-                    the spec of a ClusterAccessMapping. Exactly one of group or users is set.
-                  properties:
-                    clusterRoles:
-                      items:
-                        type: string
-                      minItems: 1
-                      type: array
-                    group:
-                      type: string
-                    users:
-                      items:
-                        type: string
-                      type: array
-                  required:
-                  - clusterRoles
-                  type: object
-                  x-kubernetes-validations:
-                  - message: set exactly one of group or users
-                    rule: (has(self.group) && size(self.group) > 0) != (has(self.users)
-                      && size(self.users) > 0)
+                  type: string
+                minItems: 1
                 type: array
-              resourceQuota:
-                description: |-
-                  ResourceQuota, when set, is applied to the namespace; clearing it removes
-                  the managed quota.
-                properties:
-                  hard:
-                    additionalProperties:
-                      anyOf:
-                      - type: integer
-                      - type: string
-                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                      x-kubernetes-int-or-string: true
-                    description: ResourceList is a set of (resource name, quantity)
-                      pairs.
-                    type: object
-                type: object
+              group:
+                type: string
+              users:
+                items:
+                  type: string
+                type: array
+            required:
+            - clusterRoles
             type: object
+            x-kubernetes-validations:
+            - message: set exactly one of group or users
+              rule: (has(self.group) && size(self.group) > 0) != (has(self.users)
+                && size(self.users) > 0)
           status:
             properties:
               conditions:

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: AGPL-3.0-only -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>k8s-controller</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<h1>k8s-controller</h1>
+<div class="tabs">
+  <button id="tab-ns" class="active" onclick="tab('ns')">Namespaces</button>
+  <button id="tab-cluster" onclick="tab('cluster')">Cluster access</button>
+  <button id="tab-search" onclick="tab('search')">Search access</button>
+  <span class="spacer"></span>
+  <button onclick="refresh()">Refresh</button>
+</div>
+<div id="view-ns">
+  <div class="row">
+    <section><div id="ns-list"></div></section>
+    <section id="ns-detail"><p class="muted">Select a namespace.</p></section>
+  </div>
+</div>
+<div id="view-cluster" hidden>
+  <section><div id="cluster-out"></div></section>
+</div>
+<div id="view-search" hidden>
+  <section>
+    <p>Enter an exact username or group to see which namespaces grant it access.</p>
+    <input id="q" placeholder="username or group" onkeydown="if(event.key==='Enter')search()">
+    <button class="act" onclick="search()">Search</button>
+    <div id="search-out"></div>
+  </section>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

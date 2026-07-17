@@ -14,6 +14,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 )
@@ -21,6 +22,7 @@ import (
 func main() {
 	runController := flag.Bool("controller", false, "run the reconciler (default: run both when neither -controller nor -server is given)")
 	runServer := flag.Bool("server", false, "run the HTTP API and UI (default: run both when neither -controller nor -server is given)")
+	syncPeriod := flag.Duration("sync-period", time.Hour, "interval at which the reconciler re-syncs every ManagedNamespace as a drift-repair safety net")
 	flag.Parse()
 	controllerEnabled, serverEnabled := *runController, *runServer
 	if !controllerEnabled && !serverEnabled {
@@ -42,11 +44,14 @@ func main() {
 		return
 	}
 
-	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081"})
+	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}})
 	if e != nil {
 		panic(e)
 	}
 	if e = (&c.Reconciler{Client: mgr.GetClient()}).Setup(mgr); e != nil {
+		panic(e)
+	}
+	if e = (&c.ClusterAccessReconciler{Client: mgr.GetClient()}).Setup(mgr); e != nil {
 		panic(e)
 	}
 	if serverEnabled {

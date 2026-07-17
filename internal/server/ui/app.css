@@ -1,0 +1,27 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+body{font:15px system-ui;margin:2rem auto;max-width:1000px;padding:0 1rem;color:#17202a}
+h1{margin:0 0 1rem}
+h3{margin:.2rem 0}
+h4{margin:1rem 0 .3rem;color:#566}
+
+.tabs{display:flex;gap:.5rem;align-items:center;border-bottom:2px solid #e1e5e8;margin-bottom:1rem}
+.tabs button{background:none;border:none;padding:.6rem .9rem;font-size:15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:#566}
+.tabs button.active{color:#17202a;border-bottom-color:#2a7ade;font-weight:600}
+.tabs .spacer{flex:1}
+
+.row{display:grid;grid-template-columns:16rem 1fr;gap:1rem}
+@media(max-width:700px){.row{display:block}}
+section{border:1px solid #ccd1d1;border-radius:8px;padding:1rem;margin:0}
+
+#ns-list{display:flex;flex-direction:column;gap:.25rem}
+.ns-item{text-align:left;background:#f4f6f7;border:1px solid #dfe4e6;border-radius:6px;padding:.5rem .7rem;cursor:pointer;font:inherit}
+.ns-item.sel{background:#e7f0fb;border-color:#2a7ade}
+
+input{box-sizing:border-box;padding:.55rem;font-size:15px;width:20rem;max-width:100%}
+button.act{padding:.55rem .9rem;margin-left:.4rem}
+
+table{border-collapse:collapse;width:100%;margin:.3rem 0 1rem}
+th,td{text-align:left;border:1px solid #e1e5e8;padding:.4rem .6rem;vertical-align:top}
+th{background:#f4f6f7}
+
+.muted{color:#889}
