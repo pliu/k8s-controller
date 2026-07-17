@@ -3,19 +3,21 @@ package core
 
 import "testing"
 
-func TestBindingName(t *testing.T) {
-	a := BindingName("team-readers", "pod-reader", "team-a")
-	if a != BindingName("team-readers", "pod-reader", "team-a") {
-		t.Fatal("BindingName is not deterministic")
-	}
+func TestBindingNameDistinct(t *testing.T) {
+	a := BindingName("team-a", "g:devs", "pod-reader")
 	for _, b := range []string{
-		BindingName("team-writers", "pod-reader", "team-a"),
-		BindingName("team-readers", "secret-reader", "team-a"),
-		BindingName("team-readers", "pod-reader", "team-b"),
-		BindingName("team-readers", "pod-reader", "*"),
+		BindingName("team-b", "g:devs", "pod-reader"),
+		BindingName("team-a", "u:hash", "pod-reader"),
+		BindingName("team-a", "g:devs", "secret-reader"),
 	} {
 		if a == b {
 			t.Fatalf("distinct triples collided on %q", a)
 		}
+	}
+}
+
+func TestQuotaNameDistinct(t *testing.T) {
+	if QuotaName("team-a") == QuotaName("team-b") {
+		t.Fatal("distinct owners collided")
 	}
 }

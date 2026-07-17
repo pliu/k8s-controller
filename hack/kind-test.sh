@@ -16,16 +16,22 @@ docker build -t "$image" .
 kind load docker-image "$image" --name "$cluster"
 kubectl apply -k config
 kubectl -n k8s-controller rollout status deployment/k8s-controller --timeout=120s
-kubectl create namespace team-a
 kubectl apply -f config/sample.yaml
 
-# The controller reconciles the AccessMapping into a namespace RoleBinding whose
-# subjects are the mapping's users and groups directly; no ServiceAccount is created.
+# The operator creates the namespace, its ResourceQuota, and the RoleBindings for
+# each AccessMapping (group or user subjects bound directly). Nothing is created
+# up front; the ManagedNamespace drives it all.
 for _ in {1..30}; do
-  kubectl -n team-a get rolebinding -l "k8s.pliu.dev/owner-name=team-readers" -o name | grep -q rolebinding && break
+  kubectl get namespace team-a >/dev/null 2>&1 && break
   sleep 1
 done
-kubectl -n team-a get rolebinding -l "k8s.pliu.dev/owner-name=team-readers" -o name | grep -q rolebinding
+kubectl get namespace team-a
+for _ in {1..30}; do
+  kubectl -n team-a get rolebinding -l "k8s.pliu.dev/owner-name=team-a" -o name | grep -q rolebinding && break
+  sleep 1
+done
+kubectl -n team-a get rolebinding -l "k8s.pliu.dev/owner-name=team-a" -o name | grep -q rolebinding
+kubectl -n team-a get resourcequota -l "k8s.pliu.dev/owner-name=team-a" -o name | grep -q resourcequota
 
 kubectl -n k8s-controller port-forward service/k8s-controller 18080:80 >"${TMPDIR:-/tmp}/k8s-controller-port-forward.log" 2>&1 &
 forward_pid=$!

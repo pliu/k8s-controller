@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.19.0
-  name: accessmappings.k8s.pliu.dev
+  name: managednamespaces.k8s.pliu.dev
 spec:
   group: k8s.pliu.dev
   names:
-    kind: AccessMapping
-    listKind: AccessMappingList
-    plural: accessmappings
+    kind: ManagedNamespace
+    listKind: ManagedNamespaceList
+    plural: managednamespaces
     shortNames:
-    - amap
-    singular: accessmapping
+    - mns
+    singular: managednamespace
   scope: Cluster
   versions:
   - name: v1alpha1
@@ -38,36 +38,52 @@ spec:
           metadata:
             type: object
           spec:
+            description: |-
+              ManagedNamespaceSpec configures the namespace named by metadata.name. The
+              resource's own name is the namespace name, so there is exactly one
+              ManagedNamespace per namespace.
             properties:
-              clusterRoles:
+              accessMappings:
                 items:
+                  description: |-
+                    AccessMapping grants a single group OR a list of users a set of ClusterRoles
+                    within the managed namespace. Exactly one of group or users is set.
                   properties:
-                    clusterWide:
-                      type: boolean
-                    name:
+                    clusterRoles:
+                      items:
+                        type: string
+                      minItems: 1
+                      type: array
+                    group:
                       type: string
-                    namespaces:
+                    users:
                       items:
                         type: string
                       type: array
                   required:
-                  - name
+                  - clusterRoles
                   type: object
                   x-kubernetes-validations:
-                  - message: select namespaces or clusterWide
-                    rule: (self.clusterWide && !has(self.namespaces)) || (!self.clusterWide
-                      && has(self.namespaces) && size(self.namespaces)>0)
+                  - message: set exactly one of group or users
+                    rule: (has(self.group) && size(self.group) > 0) != (has(self.users)
+                      && size(self.users) > 0)
                 type: array
-              groups:
-                items:
-                  type: string
-                type: array
-              usernames:
-                items:
-                  type: string
-                type: array
-            required:
-            - clusterRoles
+              resourceQuota:
+                description: |-
+                  ResourceQuota, when set, is applied to the namespace; clearing it removes
+                  the managed quota.
+                properties:
+                  hard:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: ResourceList is a set of (resource name, quantity)
+                      pairs.
+                    type: object
+                type: object
             type: object
           status:
             properties:
@@ -132,8 +148,6 @@ spec:
                   properties:
                     clusterRole:
                       type: string
-                    namespace:
-                      type: string
                     reason:
                       type: string
                   required:
@@ -143,16 +157,10 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
-              policyDigest:
-                type: string
             type: object
         required:
         - spec
         type: object
-        x-kubernetes-validations:
-        - message: at least one username or group is required
-          rule: (has(self.spec.usernames) && size(self.spec.usernames)>0) || (has(self.spec.groups)
-            && size(self.spec.groups)>0)
     served: true
     storage: true
     subresources:

@@ -14,9 +14,15 @@ const Finalizer = "k8s.pliu.dev/binding-cleanup"
 
 func Hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
 
-// BindingName is the deterministic name of the RoleBinding or ClusterRoleBinding
-// generated for one (AccessMapping, ClusterRole, scope) triple. The scope is a
-// namespace name for a RoleBinding or "*" for a cluster-wide ClusterRoleBinding.
-func BindingName(mapping, role, scope string) string {
-	return "rbacctl-" + Hash(mapping + "\x00" + role + "\x00" + scope)[:20]
+// BindingName is the deterministic name of the RoleBinding generated for one
+// (ManagedNamespace, subject set, ClusterRole) triple. subject identifies the
+// AccessMapping's group or user list so its bindings stay distinct.
+func BindingName(owner, subject, role string) string {
+	return "k8sc-" + Hash(owner + "\x00" + subject + "\x00" + role)[:20]
+}
+
+// QuotaName is the deterministic name of the ResourceQuota a ManagedNamespace
+// manages in its namespace.
+func QuotaName(owner string) string {
+	return "k8sc-quota-" + Hash(owner)[:16]
 }

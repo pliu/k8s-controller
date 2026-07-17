@@ -1,4 +1,4 @@
-.PHONY: test verify manifests install kind-test
+.PHONY: test verify generate manifests install kind-test
 test:
 	go test ./...
 verify:
@@ -6,6 +6,8 @@ verify:
 	go test ./...
 	go vet ./...
 	git diff --check
+generate:
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 object paths=./api/...
 manifests:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 crd paths=./api/... output:crd:artifacts:config=config/crd
 install:

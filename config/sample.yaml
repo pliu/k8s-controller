@@ -4,9 +4,16 @@ metadata: {name: pod-reader}
 rules: [{apiGroups: [""], resources: [pods], verbs: [get, list, watch]}]
 ---
 apiVersion: k8s.pliu.dev/v1alpha1
-kind: AccessMapping
-metadata: {name: team-readers}
+kind: ManagedNamespace
+metadata: {name: team-a}
 spec:
-  usernames: [alice@example.com]
-  groups: [6f9619ff-8b86-d011-b42d-00c04fc964ff]
-  clusterRoles: [{name: pod-reader, namespaces: [team-a]}]
+  resourceQuota:
+    hard:
+      pods: "50"
+      requests.cpu: "10"
+      requests.memory: 20Gi
+  accessMappings:
+    - group: 6f9619ff-8b86-d011-b42d-00c04fc964ff
+      clusterRoles: [pod-reader]
+    - users: [alice@example.com, bob@example.com]
+      clusterRoles: [pod-reader]

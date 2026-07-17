@@ -3,7 +3,8 @@ package controller
 
 import (
 	"context"
-	"encoding/json"
+	"sort"
+	"strings"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -20,172 +21,97 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// Reconciler converges the RoleBindings and ClusterRoleBindings implied by each
-// AccessMapping. A mapping's usernames and AD groups become User and Group
-// binding subjects directly, so Kubernetes evaluates them against the
-// authenticated identity on every request; the controller manages no
-// ServiceAccounts or credentials.
+// Reconciler keeps the Namespace, ResourceQuota, and RoleBindings implied by each
+// ManagedNamespace in sync. It creates the namespace if missing but never deletes
+// it: on ManagedNamespace deletion only the quota and bindings it owns are
+// removed. Referenced ClusterRoles are not managed here; a missing one fails
+// closed and is reported in status.
 type Reconciler struct{ client.Client }
 
 func (r *Reconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
-	var mapping api.AccessMapping
-	if e := r.Get(ctx, q.NamespacedName, &mapping); e != nil {
+	var mns api.ManagedNamespace
+	if e := r.Get(ctx, q.NamespacedName, &mns); e != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(e)
 	}
-	if !mapping.DeletionTimestamp.IsZero() {
-		if e := r.cleanup(ctx, &mapping, nil, nil); e != nil {
+	if !mns.DeletionTimestamp.IsZero() {
+		if e := r.pruneBindings(ctx, &mns, nil); e != nil {
 			return ctrl.Result{}, e
 		}
-		base := mapping.DeepCopy()
-		controllerutil.RemoveFinalizer(&mapping, core.Finalizer)
-		return ctrl.Result{}, r.Patch(ctx, &mapping, client.MergeFrom(base))
-	}
-	if mapping.Labels[core.LabelManagedBy] != core.ManagedBy || !controllerutil.ContainsFinalizer(&mapping, core.Finalizer) {
-		base := mapping.DeepCopy()
-		if mapping.Labels == nil {
-			mapping.Labels = map[string]string{}
+		if e := r.pruneQuotas(ctx, &mns, ""); e != nil {
+			return ctrl.Result{}, e
 		}
-		mapping.Labels[core.LabelManagedBy] = core.ManagedBy
-		controllerutil.AddFinalizer(&mapping, core.Finalizer)
-		return ctrl.Result{Requeue: true}, r.Patch(ctx, &mapping, client.MergeFrom(base))
+		// The namespace is intentionally left in place.
+		base := mns.DeepCopy()
+		controllerutil.RemoveFinalizer(&mns, core.Finalizer)
+		return ctrl.Result{}, r.Patch(ctx, &mns, client.MergeFrom(base))
+	}
+	if mns.Labels[core.LabelManagedBy] != core.ManagedBy || !controllerutil.ContainsFinalizer(&mns, core.Finalizer) {
+		base := mns.DeepCopy()
+		if mns.Labels == nil {
+			mns.Labels = map[string]string{}
+		}
+		mns.Labels[core.LabelManagedBy] = core.ManagedBy
+		controllerutil.AddFinalizer(&mns, core.Finalizer)
+		return ctrl.Result{Requeue: true}, r.Patch(ctx, &mns, client.MergeFrom(base))
 	}
 
-	subjects := subjectsFor(&mapping)
-	invalid := []api.InvalidReference{}
-	wantR := map[types.NamespacedName]bool{}
-	wantC := map[string]bool{}
-	for _, grant := range mapping.Spec.ClusterRoles {
-		// ClusterRoles are not managed by this operator; a mapping may reference
-		// any existing ClusterRole. A missing one fails closed (no binding).
-		var role rbacv1.ClusterRole
-		if e := r.Get(ctx, client.ObjectKey{Name: grant.Name}, &role); e != nil {
-			if !apierrors.IsNotFound(e) {
-				return ctrl.Result{}, e
-			}
-			invalid = append(invalid, api.InvalidReference{ClusterRole: grant.Name, Reason: "ClusterRole not found"})
-			continue
-		}
-		if grant.ClusterWide {
-			name := core.BindingName(mapping.Name, grant.Name, "*")
-			if e := r.ensureClusterRoleBinding(ctx, &mapping, name, grant.Name, subjects); e != nil {
-				return ctrl.Result{}, e
-			}
-			wantC[name] = true
-			continue
-		}
-		for _, ns := range grant.Namespaces {
-			var namespace corev1.Namespace
-			e := r.Get(ctx, client.ObjectKey{Name: ns}, &namespace)
-			if apierrors.IsNotFound(e) {
-				invalid = append(invalid, api.InvalidReference{ClusterRole: grant.Name, Namespace: ns, Reason: "Namespace not found"})
-				continue
-			} else if e != nil {
-				return ctrl.Result{}, e
-			} else if !namespace.DeletionTimestamp.IsZero() {
-				invalid = append(invalid, api.InvalidReference{ClusterRole: grant.Name, Namespace: ns, Reason: "Namespace is terminating"})
-				continue
-			}
-			name := core.BindingName(mapping.Name, grant.Name, ns)
-			if e := r.ensureRoleBinding(ctx, &mapping, name, ns, grant.Name, subjects); e != nil {
-				return ctrl.Result{}, e
-			}
-			wantR[types.NamespacedName{Name: name, Namespace: ns}] = true
-		}
-	}
-	if e := r.cleanup(ctx, &mapping, wantR, wantC); e != nil {
+	if e := r.ensureNamespace(ctx, &mns); e != nil {
 		return ctrl.Result{}, e
 	}
-	return ctrl.Result{}, r.status(ctx, &mapping, invalid)
+	if e := r.reconcileQuota(ctx, &mns); e != nil {
+		return ctrl.Result{}, e
+	}
+	invalid, e := r.reconcileBindings(ctx, &mns)
+	if e != nil {
+		return ctrl.Result{}, e
+	}
+	return ctrl.Result{}, r.status(ctx, &mns, invalid)
 }
 
-func subjectsFor(m *api.AccessMapping) []rbacv1.Subject {
-	subjects := make([]rbacv1.Subject, 0, len(m.Spec.Usernames)+len(m.Spec.Groups))
-	for _, u := range m.Spec.Usernames {
-		subjects = append(subjects, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "User", Name: u})
-	}
-	for _, g := range m.Spec.Groups {
-		subjects = append(subjects, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "Group", Name: g})
-	}
-	return subjects
-}
-
-func (r *Reconciler) status(ctx context.Context, mapping *api.AccessMapping, invalid []api.InvalidReference) error {
-	base := mapping.DeepCopy()
-	raw, _ := json.Marshal(mapping.Spec)
-	mapping.Status.ObservedGeneration = mapping.Generation
-	mapping.Status.InvalidReferences = invalid
-	mapping.Status.PolicyDigest = core.Hash(string(raw))
-	status, reason, message := metav1.ConditionTrue, "ReferencesValid", "All references are valid"
-	if len(invalid) > 0 {
-		status, reason, message = metav1.ConditionFalse, "InvalidReferences", "One or more grants have invalid references"
-	}
-	meta.SetStatusCondition(&mapping.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: mapping.Generation})
-	return r.Status().Patch(ctx, mapping, client.MergeFrom(base))
-}
-
-func (r *Reconciler) ensureRoleBinding(ctx context.Context, m *api.AccessMapping, name, namespace, role string, subjects []rbacv1.Subject) error {
-	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
-	obj := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
-	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
-		if e = r.Delete(ctx, obj); e != nil {
-			return e
+func (r *Reconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
+	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+		if ns.Labels == nil {
+			ns.Labels = map[string]string{}
 		}
-		obj = &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
-	}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-		obj.Labels = r.labels(m)
-		obj.RoleRef = want
-		obj.Subjects = subjects
+		ns.Labels[core.LabelManagedBy] = core.ManagedBy
+		ns.Labels[core.LabelOwnerName] = mns.Name
 		return nil
 	})
 	return e
 }
 
-func (r *Reconciler) ensureClusterRoleBinding(ctx context.Context, m *api.AccessMapping, name, role string, subjects []rbacv1.Subject) error {
-	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
-	obj := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
-		if e = r.Delete(ctx, obj); e != nil {
-			return e
-		}
-		obj = &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
+func (r *Reconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {
+	keep := ""
+	if mns.Spec.ResourceQuota != nil {
+		keep = core.QuotaName(mns.Name)
 	}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-		obj.Labels = r.labels(m)
-		obj.RoleRef = want
-		obj.Subjects = subjects
+	if e := r.pruneQuotas(ctx, mns, keep); e != nil {
+		return e
+	}
+	if keep == "" {
+		return nil
+	}
+	rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: keep, Namespace: mns.Name}}
+	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, rq, func() error {
+		rq.Labels = r.labels(mns)
+		rq.Spec = corev1.ResourceQuotaSpec{Hard: mns.Spec.ResourceQuota.Hard}
 		return nil
 	})
 	return e
 }
 
-func (r *Reconciler) labels(m *api.AccessMapping) map[string]string {
-	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(m.UID), core.LabelOwnerName: m.Name}
-}
-
-// cleanup deletes generated bindings owned by the mapping that are no longer
-// wanted. When wr and wc are nil (the mapping is being deleted) every owned
-// binding is removed.
-func (r *Reconciler) cleanup(ctx context.Context, m *api.AccessMapping, wr map[types.NamespacedName]bool, wc map[string]bool) error {
-	sel := client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(m.UID)}
-	var rl rbacv1.RoleBindingList
-	if e := r.List(ctx, &rl, sel); e != nil {
+// pruneQuotas deletes owned ResourceQuotas other than keep in the current
+// namespace. keep == "" removes all owned quotas.
+func (r *Reconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
+	var list corev1.ResourceQuotaList
+	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
 		return e
 	}
-	for i := range rl.Items {
-		if wr == nil || !wr[client.ObjectKeyFromObject(&rl.Items[i])] {
-			if e := client.IgnoreNotFound(r.Delete(ctx, &rl.Items[i])); e != nil {
-				return e
-			}
-		}
-	}
-	var cl rbacv1.ClusterRoleBindingList
-	if e := r.List(ctx, &cl, sel); e != nil {
-		return e
-	}
-	for i := range cl.Items {
-		if wc == nil || !wc[cl.Items[i].Name] {
-			if e := client.IgnoreNotFound(r.Delete(ctx, &cl.Items[i])); e != nil {
+	for i := range list.Items {
+		it := &list.Items[i]
+		if keep == "" || it.Name != keep || it.Namespace != mns.Name {
+			if e := client.IgnoreNotFound(r.Delete(ctx, it)); e != nil {
 				return e
 			}
 		}
@@ -193,8 +119,116 @@ func (r *Reconciler) cleanup(ctx context.Context, m *api.AccessMapping, wr map[t
 	return nil
 }
 
-func (r *Reconciler) allMappings(ctx context.Context, _ client.Object) []reconcile.Request {
-	var l api.AccessMappingList
+func (r *Reconciler) reconcileBindings(ctx context.Context, mns *api.ManagedNamespace) ([]api.InvalidReference, error) {
+	invalid := []api.InvalidReference{}
+	want := map[types.NamespacedName]bool{}
+	for _, am := range mns.Spec.AccessMappings {
+		subjects := subjectsFor(am)
+		if len(subjects) == 0 {
+			continue
+		}
+		key := subjectKey(am)
+		for _, role := range am.ClusterRoles {
+			var cr rbacv1.ClusterRole
+			if e := r.Get(ctx, client.ObjectKey{Name: role}, &cr); e != nil {
+				if !apierrors.IsNotFound(e) {
+					return nil, e
+				}
+				invalid = append(invalid, api.InvalidReference{ClusterRole: role, Reason: "ClusterRole not found"})
+				continue
+			}
+			name := core.BindingName(mns.Name, key, role)
+			if e := r.ensureRoleBinding(ctx, mns, name, role, subjects); e != nil {
+				return nil, e
+			}
+			want[types.NamespacedName{Namespace: mns.Name, Name: name}] = true
+		}
+	}
+	if e := r.pruneBindings(ctx, mns, want); e != nil {
+		return nil, e
+	}
+	return invalid, nil
+}
+
+func subjectsFor(am api.AccessMapping) []rbacv1.Subject {
+	if am.Group != "" {
+		return []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: am.Group}}
+	}
+	subs := make([]rbacv1.Subject, 0, len(am.Users))
+	for _, u := range am.Users {
+		subs = append(subs, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "User", Name: u})
+	}
+	return subs
+}
+
+// subjectKey identifies an AccessMapping's subject set so its generated binding
+// name is stable and distinct from sibling mappings.
+func subjectKey(am api.AccessMapping) string {
+	if am.Group != "" {
+		return "g:" + am.Group
+	}
+	u := append([]string(nil), am.Users...)
+	sort.Strings(u)
+	return "u:" + core.Hash(strings.Join(u, "\x00"))
+}
+
+func (r *Reconciler) ensureRoleBinding(ctx context.Context, mns *api.ManagedNamespace, name, role string, subjects []rbacv1.Subject) error {
+	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
+	obj := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
+	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
+		if e = r.Delete(ctx, obj); e != nil {
+			return e
+		}
+		obj = &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
+	}
+	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
+		obj.Labels = r.labels(mns)
+		obj.RoleRef = want
+		obj.Subjects = subjects
+		return nil
+	})
+	return e
+}
+
+// pruneBindings deletes owned RoleBindings not in want. want == nil removes all
+// owned bindings.
+func (r *Reconciler) pruneBindings(ctx context.Context, mns *api.ManagedNamespace, want map[types.NamespacedName]bool) error {
+	var list rbacv1.RoleBindingList
+	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
+		return e
+	}
+	for i := range list.Items {
+		if want == nil || !want[client.ObjectKeyFromObject(&list.Items[i])] {
+			if e := client.IgnoreNotFound(r.Delete(ctx, &list.Items[i])); e != nil {
+				return e
+			}
+		}
+	}
+	return nil
+}
+
+func (r *Reconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference) error {
+	base := mns.DeepCopy()
+	mns.Status.ObservedGeneration = mns.Generation
+	mns.Status.InvalidReferences = invalid
+	status, reason, message := metav1.ConditionTrue, "Reconciled", "Namespace, quota, and bindings are in sync"
+	if len(invalid) > 0 {
+		status, reason, message = metav1.ConditionFalse, "InvalidReferences", "One or more ClusterRole references are invalid"
+	}
+	meta.SetStatusCondition(&mns.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: mns.Generation})
+	return r.Status().Patch(ctx, mns, client.MergeFrom(base))
+}
+
+func (r *Reconciler) labels(mns *api.ManagedNamespace) map[string]string {
+	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(mns.UID), core.LabelOwnerName: mns.Name}
+}
+
+func (r *Reconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {
+	return client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(mns.UID)}
+}
+
+func (r *Reconciler) all(ctx context.Context, _ client.Object) []reconcile.Request {
+	var l api.ManagedNamespaceList
 	if r.List(ctx, &l) != nil {
 		return nil
 	}
@@ -218,10 +252,10 @@ func (r *Reconciler) owner(_ context.Context, obj client.Object) []reconcile.Req
 
 func (r *Reconciler) Setup(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
-		For(&api.AccessMapping{}).
-		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.allMappings)).
-		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.allMappings)).
+		For(&api.ManagedNamespace{}).
+		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.all)).
+		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
+		Watches(&corev1.ResourceQuota{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
 		Watches(&rbacv1.RoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
-		Watches(&rbacv1.ClusterRoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
 		Complete(r)
 }
