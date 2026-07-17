@@ -25,7 +25,7 @@ type ClusterRoleGrant struct {
 }
 type AccessMappingSpec struct {
 	Usernames    []string           `json:"usernames,omitempty"`
-	ADGroups     []string           `json:"adGroups,omitempty"`
+	Groups       []string           `json:"groups,omitempty"`
 	ClusterRoles []ClusterRoleGrant `json:"clusterRoles"`
 }
 type InvalidReference struct {
@@ -43,7 +43,7 @@ type AccessMappingStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster,shortName=amap
 // +kubebuilder:subresource:status
-// +kubebuilder:validation:XValidation:rule="(has(self.spec.usernames) && size(self.spec.usernames)>0) || (has(self.spec.adGroups) && size(self.spec.adGroups)>0)",message="at least one username or AD group is required"
+// +kubebuilder:validation:XValidation:rule="(has(self.spec.usernames) && size(self.spec.usernames)>0) || (has(self.spec.groups) && size(self.spec.groups)>0)",message="at least one username or group is required"
 type AccessMapping struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -67,7 +67,7 @@ func (in *AccessMapping) DeepCopy() *AccessMapping {
 	*out = *in
 	out.ObjectMeta = *in.ObjectMeta.DeepCopy()
 	out.Spec.Usernames = append([]string(nil), in.Spec.Usernames...)
-	out.Spec.ADGroups = append([]string(nil), in.Spec.ADGroups...)
+	out.Spec.Groups = append([]string(nil), in.Spec.Groups...)
 	out.Spec.ClusterRoles = append([]ClusterRoleGrant(nil), in.Spec.ClusterRoles...)
 	for i := range out.Spec.ClusterRoles {
 		out.Spec.ClusterRoles[i].Namespaces = append([]string(nil), in.Spec.ClusterRoles[i].Namespaces...)

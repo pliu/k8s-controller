@@ -39,10 +39,6 @@ spec:
             type: object
           spec:
             properties:
-              adGroups:
-                items:
-                  type: string
-                type: array
               clusterRoles:
                 items:
                   properties:
@@ -61,6 +57,10 @@ spec:
                   - message: select namespaces or clusterWide
                     rule: (self.clusterWide && !has(self.namespaces)) || (!self.clusterWide
                       && has(self.namespaces) && size(self.namespaces)>0)
+                type: array
+              groups:
+                items:
+                  type: string
                 type: array
               usernames:
                 items:
@@ -150,9 +150,9 @@ spec:
         - spec
         type: object
         x-kubernetes-validations:
-        - message: at least one username or AD group is required
-          rule: (has(self.spec.usernames) && size(self.spec.usernames)>0) || (has(self.spec.adGroups)
-            && size(self.spec.adGroups)>0)
+        - message: at least one username or group is required
+          rule: (has(self.spec.usernames) && size(self.spec.usernames)>0) || (has(self.spec.groups)
+            && size(self.spec.groups)>0)
     served: true
     storage: true
     subresources:

@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 package core
 
-import (
-	api "github.com/pliu/rbac-controller/api/v1alpha1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
-)
+import "testing"
 
-func TestEvaluateGroupChanges(t *testing.T) {
-	m := api.AccessMapping{ObjectMeta: metav1.ObjectMeta{Name: "m"}, Spec: api.AccessMappingSpec{ADGroups: []string{"g"}, ClusterRoles: []api.ClusterRoleGrant{{Name: "view", Namespaces: []string{"team"}}}}}
-	a, _ := Evaluate("alice", []string{"g"}, []api.AccessMapping{m})
-	if len(a) != 1 {
-		t.Fatal(a)
+func TestBindingName(t *testing.T) {
+	a := BindingName("team-readers", "pod-reader", "team-a")
+	if a != BindingName("team-readers", "pod-reader", "team-a") {
+		t.Fatal("BindingName is not deterministic")
 	}
-	b, _ := Evaluate("alice", nil, []api.AccessMapping{m})
-	if len(b) != 0 {
-		t.Fatal(b)
+	for _, b := range []string{
+		BindingName("team-writers", "pod-reader", "team-a"),
+		BindingName("team-readers", "secret-reader", "team-a"),
+		BindingName("team-readers", "pod-reader", "team-b"),
+		BindingName("team-readers", "pod-reader", "*"),
+	} {
+		if a == b {
+			t.Fatalf("distinct triples collided on %q", a)
+		}
 	}
 }

@@ -6,10 +6,6 @@ apiVersion: v1
 kind: ServiceAccount
 metadata: {name: rbac-controller, namespace: rbac-controller}
 ---
-apiVersion: v1
-kind: ServiceAccount
-metadata: {name: rbac-controller-server, namespace: rbac-controller}
----
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata: {name: rbac-controller}
@@ -17,12 +13,12 @@ rules:
 - apiGroups: [""]
   resources: [namespaces]
   verbs: [get, list, watch]
-- apiGroups: [""]
-  resources: [serviceaccounts]
-  verbs: [get, list, watch]
 - apiGroups: [rbac.pliu.dev]
-  resources: [accessmappings, accessmappings/status]
+  resources: [accessmappings]
   verbs: [get, list, watch, update, patch]
+- apiGroups: [rbac.pliu.dev]
+  resources: [accessmappings/status]
+  verbs: [get, update, patch]
 - apiGroups: [rbac.authorization.k8s.io]
   resources: [clusterroles]
   verbs: [get, list, watch, bind]
@@ -38,51 +34,20 @@ subjects: [{kind: ServiceAccount, name: rbac-controller, namespace: rbac-control
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: rbac-controller-credentials, namespace: rbac-controller}
+metadata: {name: rbac-controller-leader-election, namespace: rbac-controller}
 rules:
-- apiGroups: [""]
-  resources: [serviceaccounts]
-  verbs: [get, list, watch, update, patch, delete]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata: {name: rbac-controller-credentials, namespace: rbac-controller}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rbac-controller-credentials}
-subjects: [{kind: ServiceAccount, name: rbac-controller, namespace: rbac-controller}]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata: {name: rbac-controller-server}
-rules:
-- apiGroups: [rbac.pliu.dev]
-  resources: [accessmappings]
+- apiGroups: [coordination.k8s.io]
+  resources: [leases]
   verbs: [get, list, watch, create, update, patch, delete]
-- apiGroups: [rbac.authorization.k8s.io]
-  resources: [clusterroles]
-  verbs: [get, list, watch, create, update, patch, delete, escalate]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata: {name: rbac-controller-server}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: rbac-controller-server}
-subjects: [{kind: ServiceAccount, name: rbac-controller-server, namespace: rbac-controller}]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata: {name: rbac-controller-server-credentials, namespace: rbac-controller}
-rules:
 - apiGroups: [""]
-  resources: [serviceaccounts]
-  verbs: [get, list, create, update, patch, delete]
-- apiGroups: [""]
-  resources: [serviceaccounts/token]
-  verbs: [create]
+  resources: [events]
+  verbs: [create, patch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: rbac-controller-server-credentials, namespace: rbac-controller}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rbac-controller-server-credentials}
-subjects: [{kind: ServiceAccount, name: rbac-controller-server, namespace: rbac-controller}]
+metadata: {name: rbac-controller-leader-election, namespace: rbac-controller}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: rbac-controller-leader-election}
+subjects: [{kind: ServiceAccount, name: rbac-controller, namespace: rbac-controller}]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -96,51 +61,22 @@ spec:
       serviceAccountName: rbac-controller
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
       containers:
-      - name: controller
+      - name: rbac-controller
         image: ghcr.io/pliu/rbac-controller:latest
         imagePullPolicy: IfNotPresent
-        command: [/controller]
-        env: [{name: POD_NAMESPACE, value: rbac-controller}]
-        ports: [{name: health, containerPort: 8081}]
+        command: [/rbac-controller]
+        ports: [{name: http, containerPort: 8080}, {name: health, containerPort: 8081}]
         readinessProbe: {httpGet: {path: /readyz, port: health}, initialDelaySeconds: 2}
         livenessProbe: {httpGet: {path: /healthz, port: health}, initialDelaySeconds: 10}
-        resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
-        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata: {name: rbac-controller-server, namespace: rbac-controller}
-spec:
-  replicas: 3
-  selector: {matchLabels: {app: rbac-controller-server}}
-  template:
-    metadata: {labels: {app: rbac-controller-server, app.kubernetes.io/managed-by: rbac-controller}}
-    spec:
-      serviceAccountName: rbac-controller-server
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
-      containers:
-      - name: server
-        image: ghcr.io/pliu/rbac-controller:latest
-        imagePullPolicy: IfNotPresent
-        command: [/server]
-        ports: [{containerPort: 8080}]
-        env: [{name: POD_NAMESPACE, value: rbac-controller}, {name: KUBERNETES_PUBLIC_SERVER, value: https://kubernetes.example.com}]
-        readinessProbe: {httpGet: {path: /livez, port: 8080}, initialDelaySeconds: 2}
-        livenessProbe: {httpGet: {path: /livez, port: 8080}, initialDelaySeconds: 10}
         resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 256Mi}}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
 ---
 apiVersion: v1
 kind: Service
 metadata: {name: rbac-controller, namespace: rbac-controller}
-spec: {selector: {app: rbac-controller-server}, ports: [{port: 80, targetPort: 8080}]}
+spec: {selector: {app: rbac-controller}, ports: [{port: 80, targetPort: http}]}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata: {name: rbac-controller, namespace: rbac-controller}
-spec: {minAvailable: 1, selector: {matchLabels: {app: rbac-controller}}}
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata: {name: rbac-controller-server, namespace: rbac-controller}
-spec: {minAvailable: 2, selector: {matchLabels: {app: rbac-controller-server}}}
+spec: {minAvailable: 2, selector: {matchLabels: {app: rbac-controller}}}
