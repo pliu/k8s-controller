@@ -12,13 +12,16 @@ metadata: {name: k8s-controller}
 rules:
 - apiGroups: [""]
   resources: [namespaces]
-  verbs: [get, list, watch, create, update, patch]
+  verbs: [get, list, watch, create, update, patch, delete]
 - apiGroups: [""]
   resources: [resourcequotas]
   verbs: [get, list, watch, create, update, patch, delete]
 - apiGroups: [k8s.pliu.dev]
   resources: [managednamespaces, clusteraccessmappings]
   verbs: [get, list, watch, update, patch]
+- apiGroups: [k8s.pliu.dev]
+  resources: [managednamespaces]
+  verbs: [create, delete]
 - apiGroups: [k8s.pliu.dev]
   resources: [managednamespaces/status, clusteraccessmappings/status]
   verbs: [get, update, patch]
@@ -62,7 +65,7 @@ spec:
     metadata: {labels: {app: k8s-controller, app.kubernetes.io/managed-by: k8s-controller}}
     spec:
       serviceAccountName: k8s-controller
-      securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: k8s-controller
         image: ghcr.io/pliu/k8s-controller:latest

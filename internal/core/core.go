@@ -10,6 +10,7 @@ const ManagedBy = "k8s-controller"
 const LabelManagedBy = "app.kubernetes.io/managed-by"
 const LabelOwnerUID = "k8s.pliu.dev/owner-uid"
 const LabelOwnerName = "k8s.pliu.dev/owner-name"
+const LabelDeleteNamespace = "k8s.pliu.dev/delete-namespace"
 const Finalizer = "k8s.pliu.dev/binding-cleanup"
 
 func Hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToString(h[:]) }
