@@ -14,6 +14,11 @@ func TestStaticRoutes(t *testing.T) {
 		{"/app.css", ".tabs", "text/css"},
 		{"/app.js", "managednamespaces", "javascript"},
 		{"/livez", "ok", ""},
+		// Served from the shared controller-runtime registry: earlier requests in
+		// this test must already appear as HTTP series. (The go/process and
+		// reconciler series come from packages linked into the real binary.)
+		{"/metrics", "k8s_controller_http_requests_total", ""},
+		{"/metrics", "k8s_controller_http_request_duration_seconds", ""},
 	}
 	for _, c := range cases {
 		rr := httptest.NewRecorder()

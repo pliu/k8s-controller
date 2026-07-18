@@ -8,7 +8,9 @@ import (
 	"net/http"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 //go:embed ui
@@ -26,10 +28,13 @@ type Server struct {
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	// The shared controller-runtime registry means this one endpoint serves the
+	// reconciler metrics and the HTTP metrics from the same process.
+	m.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))
 	m.HandleFunc("GET /api/v1/managednamespaces", s.namespaces)
 	m.HandleFunc("GET /api/v1/clusteraccessmappings", s.clusterAccess)
 	m.Handle("/", http.FileServer(http.FS(uiRoot)))
-	return m
+	return instrument(m)
 }
 
 func (s *Server) namespaces(w http.ResponseWriter, r *http.Request) {

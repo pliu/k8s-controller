@@ -47,3 +47,8 @@ for _ in {1..30}; do
   sleep 1
 done
 curl -fsS http://127.0.0.1:18080/livez >/dev/null
+
+# One endpoint serves reconciler and HTTP-server metrics from the shared registry.
+metrics=$(curl -fsS http://127.0.0.1:18080/metrics)
+grep -q controller_runtime_reconcile_total <<<"$metrics"
+grep -q k8s_controller_http_requests_total <<<"$metrics"

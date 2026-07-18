@@ -17,12 +17,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
 func main() {
 	runController := flag.Bool("controller", false, "run the reconciler (default: run both when neither -controller nor -server is given)")
 	runServer := flag.Bool("server", false, "run the HTTP API and UI (default: run both when neither -controller nor -server is given)")
 	syncPeriod := flag.Duration("sync-period", time.Hour, "interval at which the reconciler re-syncs every ManagedNamespace as a drift-repair safety net")
+	listen := flag.String("listen", ":8080", "address the HTTP server (UI, API, and /metrics) binds; controller-only mode serves /metrics here instead")
 	flag.Parse()
 	controllerEnabled, serverEnabled := *runController, *runServer
 	if !controllerEnabled && !serverEnabled {
@@ -38,17 +40,25 @@ func main() {
 	// The HTTP server is stateless and needs neither a manager nor leader
 	// election, so run it directly when the reconciler is not also enabled.
 	if serverEnabled && !controllerEnabled {
-		if e := serve(ctx, cfg, scheme); e != nil {
+		if e := serve(ctx, cfg, scheme, *listen); e != nil {
 			panic(e)
 		}
 		return
 	}
 
-	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}})
+	// Every mode serves the shared metrics registry on the listen address. When
+	// the HTTP server runs it owns that address and serves /metrics itself, so
+	// the manager's own metrics listener is disabled; controller-only mode
+	// keeps the manager's listener on the same address instead.
+	metricsAddr := *listen
+	if serverEnabled {
+		metricsAddr = "0"
+	}
+	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}, Metrics: metricsserver.Options{BindAddress: metricsAddr}})
 	if e != nil {
 		panic(e)
 	}
-	if e = (&c.Reconciler{Client: mgr.GetClient()}).Setup(mgr); e != nil {
+	if e = (&c.ManagedNamespaceReconciler{Client: mgr.GetClient()}).Setup(mgr); e != nil {
 		panic(e)
 	}
 	if e = (&c.ClusterAccessReconciler{Client: mgr.GetClient()}).Setup(mgr); e != nil {
@@ -57,7 +67,7 @@ func main() {
 	if serverEnabled {
 		// Register as a non-leader-election runnable so the API is served by
 		// every replica, not only the one holding the reconciler lease.
-		if e = mgr.Add(&serverRunnable{cfg: cfg, scheme: scheme}); e != nil {
+		if e = mgr.Add(&serverRunnable{cfg: cfg, scheme: scheme, addr: *listen}); e != nil {
 			panic(e)
 		}
 	}
@@ -71,18 +81,21 @@ func main() {
 type serverRunnable struct {
 	cfg    *rest.Config
 	scheme *runtime.Scheme
+	addr   string
 }
 
-func (*serverRunnable) NeedLeaderElection() bool          { return false }
-func (r *serverRunnable) Start(ctx context.Context) error { return serve(ctx, r.cfg, r.scheme) }
+func (*serverRunnable) NeedLeaderElection() bool { return false }
+func (r *serverRunnable) Start(ctx context.Context) error {
+	return serve(ctx, r.cfg, r.scheme, r.addr)
+}
 
-func serve(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme) error {
+func serve(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme, addr string) error {
 	cl, e := client.New(cfg, client.Options{Scheme: scheme})
 	if e != nil {
 		return e
 	}
 	app := &s.Server{Client: cl}
-	httpServer := &http.Server{Addr: ":8080", Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	httpServer := &http.Server{Addr: addr, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {
 		<-ctx.Done()
 		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

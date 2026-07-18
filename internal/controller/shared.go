@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+package controller
+
+import (
+	"sort"
+	"strings"
+
+	api "github.com/pliu/k8s-controller/api/v1alpha1"
+	"github.com/pliu/k8s-controller/internal/core"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/types"
+)
+
+// Helpers shared by the ManagedNamespace and ClusterAccessMapping reconcilers,
+// which both turn an AccessMapping's subject set into owned bindings.
+
+func subjectsFor(am api.AccessMapping) []rbacv1.Subject {
+	if am.Group != "" {
+		return []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: am.Group}}
+	}
+	subs := make([]rbacv1.Subject, 0, len(am.Users))
+	for _, u := range am.Users {
+		subs = append(subs, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "User", Name: u})
+	}
+	return subs
+}
+
+// subjectKey identifies an AccessMapping's subject set so its generated binding
+// name is stable and distinct from sibling mappings.
+func subjectKey(am api.AccessMapping) string {
+	if am.Group != "" {
+		return "g:" + am.Group
+	}
+	u := append([]string(nil), am.Users...)
+	sort.Strings(u)
+	return "u:" + core.Hash(strings.Join(u, "\x00"))
+}
+
+// ownerLabels stamp a generated object with its owning custom resource so drift
+// can be detected and stale objects cleaned up without adopting anything else.
+func ownerLabels(uid types.UID, name string) map[string]string {
+	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
+}

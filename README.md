@@ -42,7 +42,16 @@ default; pass `-controller` or `-server` to run only one. The default manifests
 deploy the combined mode, with the reconciler under leader election and the API
 served by every replica. Reconciliation is watch-driven; `-sync-period` (default
 `1h`) sets how often every `ManagedNamespace` is re-synced as a drift-repair
-safety net.
+safety net. `-listen` (default `:8080`) sets the HTTP bind address.
+
+Prometheus metrics are served at `/metrics` on the listen address in every mode,
+from one shared registry: controller-runtime's reconcile/workqueue/client
+series, Go and process collectors, the viewer's request count and latency
+(`k8s_controller_http_*`), and `k8s_controller_invalid_references` reporting
+each resource's currently-invalid ClusterRole references. In combined and
+server-only modes the HTTP server serves it; in controller-only mode the
+manager's own metrics listener binds the same address, so the scrape target is
+identical everywhere.
 
 The server exposes `GET /api/v1/managednamespaces` and
 `GET /api/v1/clusteraccessmappings` plus an embedded UI (`internal/server/ui`)

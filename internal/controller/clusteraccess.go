@@ -33,6 +33,7 @@ func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request)
 		if e := r.prune(ctx, &cam, nil); e != nil {
 			return ctrl.Result{}, e
 		}
+		invalidReferences.DeleteLabelValues("clusteraccessmapping", cam.Name)
 		base := cam.DeepCopy()
 		controllerutil.RemoveFinalizer(&cam, core.Finalizer)
 		return ctrl.Result{}, r.Patch(ctx, &cam, client.MergeFrom(base))
@@ -110,6 +111,7 @@ func (r *ClusterAccessReconciler) prune(ctx context.Context, cam *api.ClusterAcc
 }
 
 func (r *ClusterAccessReconciler) status(ctx context.Context, cam *api.ClusterAccessMapping, invalid []api.InvalidReference) error {
+	invalidReferences.WithLabelValues("clusteraccessmapping", cam.Name).Set(float64(len(invalid)))
 	base := cam.DeepCopy()
 	cam.Status.ObservedGeneration = cam.Generation
 	cam.Status.InvalidReferences = invalid

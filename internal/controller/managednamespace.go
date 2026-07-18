@@ -3,8 +3,6 @@ package controller
 
 import (
 	"context"
-	"sort"
-	"strings"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -21,14 +19,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// Reconciler keeps the Namespace, ResourceQuota, and RoleBindings implied by each
-// ManagedNamespace in sync. It creates the namespace if missing but never deletes
-// it: on ManagedNamespace deletion only the quota and bindings it owns are
-// removed. Referenced ClusterRoles are not managed here; a missing one fails
-// closed and is reported in status.
-type Reconciler struct{ client.Client }
+// ManagedNamespaceReconciler keeps the Namespace, ResourceQuota, and
+// RoleBindings implied by each ManagedNamespace in sync. It creates the
+// namespace if missing but never deletes it: on ManagedNamespace deletion only
+// the quota and bindings it owns are removed. Referenced ClusterRoles are not
+// managed here; a missing one fails closed and is reported in status.
+type ManagedNamespaceReconciler struct{ client.Client }
 
-func (r *Reconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
+func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
 	var mns api.ManagedNamespace
 	if e := r.Get(ctx, q.NamespacedName, &mns); e != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(e)
@@ -41,6 +39,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result
 			return ctrl.Result{}, e
 		}
 		// The namespace is intentionally left in place.
+		invalidReferences.DeleteLabelValues("managednamespace", mns.Name)
 		base := mns.DeepCopy()
 		controllerutil.RemoveFinalizer(&mns, core.Finalizer)
 		return ctrl.Result{}, r.Patch(ctx, &mns, client.MergeFrom(base))
@@ -68,7 +67,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result
 	return ctrl.Result{}, r.status(ctx, &mns, invalid)
 }
 
-func (r *Reconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
+func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
 	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
 		if ns.Labels == nil {
@@ -81,7 +80,7 @@ func (r *Reconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamesp
 	return e
 }
 
-func (r *Reconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {
+func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {
 	keep := ""
 	if mns.Spec.ResourceQuota != nil {
 		keep = core.QuotaName(mns.Name)
@@ -103,7 +102,7 @@ func (r *Reconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespa
 
 // pruneQuotas deletes owned ResourceQuotas other than keep in the current
 // namespace. keep == "" removes all owned quotas.
-func (r *Reconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
+func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
 	var list corev1.ResourceQuotaList
 	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
 		return e
@@ -119,7 +118,7 @@ func (r *Reconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace,
 	return nil
 }
 
-func (r *Reconciler) reconcileBindings(ctx context.Context, mns *api.ManagedNamespace) ([]api.InvalidReference, error) {
+func (r *ManagedNamespaceReconciler) reconcileBindings(ctx context.Context, mns *api.ManagedNamespace) ([]api.InvalidReference, error) {
 	invalid := []api.InvalidReference{}
 	want := map[types.NamespacedName]bool{}
 	for _, am := range mns.Spec.AccessMappings {
@@ -150,29 +149,7 @@ func (r *Reconciler) reconcileBindings(ctx context.Context, mns *api.ManagedName
 	return invalid, nil
 }
 
-func subjectsFor(am api.AccessMapping) []rbacv1.Subject {
-	if am.Group != "" {
-		return []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: am.Group}}
-	}
-	subs := make([]rbacv1.Subject, 0, len(am.Users))
-	for _, u := range am.Users {
-		subs = append(subs, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "User", Name: u})
-	}
-	return subs
-}
-
-// subjectKey identifies an AccessMapping's subject set so its generated binding
-// name is stable and distinct from sibling mappings.
-func subjectKey(am api.AccessMapping) string {
-	if am.Group != "" {
-		return "g:" + am.Group
-	}
-	u := append([]string(nil), am.Users...)
-	sort.Strings(u)
-	return "u:" + core.Hash(strings.Join(u, "\x00"))
-}
-
-func (r *Reconciler) ensureRoleBinding(ctx context.Context, mns *api.ManagedNamespace, name, role string, subjects []rbacv1.Subject) error {
+func (r *ManagedNamespaceReconciler) ensureRoleBinding(ctx context.Context, mns *api.ManagedNamespace, name, role string, subjects []rbacv1.Subject) error {
 	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
 	obj := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
 	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
@@ -192,7 +169,7 @@ func (r *Reconciler) ensureRoleBinding(ctx context.Context, mns *api.ManagedName
 
 // pruneBindings deletes owned RoleBindings not in want. want == nil removes all
 // owned bindings.
-func (r *Reconciler) pruneBindings(ctx context.Context, mns *api.ManagedNamespace, want map[types.NamespacedName]bool) error {
+func (r *ManagedNamespaceReconciler) pruneBindings(ctx context.Context, mns *api.ManagedNamespace, want map[types.NamespacedName]bool) error {
 	var list rbacv1.RoleBindingList
 	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
 		return e
@@ -207,7 +184,8 @@ func (r *Reconciler) pruneBindings(ctx context.Context, mns *api.ManagedNamespac
 	return nil
 }
 
-func (r *Reconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference) error {
+func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference) error {
+	invalidReferences.WithLabelValues("managednamespace", mns.Name).Set(float64(len(invalid)))
 	base := mns.DeepCopy()
 	mns.Status.ObservedGeneration = mns.Generation
 	mns.Status.InvalidReferences = invalid
@@ -219,21 +197,15 @@ func (r *Reconciler) status(ctx context.Context, mns *api.ManagedNamespace, inva
 	return r.Status().Patch(ctx, mns, client.MergeFrom(base))
 }
 
-func (r *Reconciler) labels(mns *api.ManagedNamespace) map[string]string {
+func (r *ManagedNamespaceReconciler) labels(mns *api.ManagedNamespace) map[string]string {
 	return ownerLabels(mns.UID, mns.Name)
 }
 
-// ownerLabels stamp a generated object with its owning custom resource so drift
-// can be detected and stale objects cleaned up without adopting anything else.
-func ownerLabels(uid types.UID, name string) map[string]string {
-	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
-}
-
-func (r *Reconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {
+func (r *ManagedNamespaceReconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {
 	return client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(mns.UID)}
 }
 
-func (r *Reconciler) all(ctx context.Context, _ client.Object) []reconcile.Request {
+func (r *ManagedNamespaceReconciler) all(ctx context.Context, _ client.Object) []reconcile.Request {
 	var l api.ManagedNamespaceList
 	if r.List(ctx, &l) != nil {
 		return nil
@@ -245,7 +217,7 @@ func (r *Reconciler) all(ctx context.Context, _ client.Object) []reconcile.Reque
 	return o
 }
 
-func (r *Reconciler) owner(_ context.Context, obj client.Object) []reconcile.Request {
+func (r *ManagedNamespaceReconciler) owner(_ context.Context, obj client.Object) []reconcile.Request {
 	if obj.GetLabels()[core.LabelManagedBy] != core.ManagedBy {
 		return nil
 	}
@@ -256,7 +228,7 @@ func (r *Reconciler) owner(_ context.Context, obj client.Object) []reconcile.Req
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
-func (r *Reconciler) Setup(m ctrl.Manager) error {
+func (r *ManagedNamespaceReconciler) Setup(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
 		For(&api.ManagedNamespace{}).
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.all)).
