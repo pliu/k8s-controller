@@ -81,3 +81,57 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 		t.Fatal("role binding should have been deleted")
 	}
 }
+
+// A ManagedNamespace recreated under the same name gets a new UID. Quotas left
+// by the previous CR still carry the old owner-uid; prune must match on owner
+// name so a successor without spec.resourceQuota can clear them.
+func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	name := "team-a"
+	mns := &api.ManagedNamespace{ObjectMeta: metav1.ObjectMeta{
+		Name:       name,
+		UID:        types.UID("new-uid"),
+		Finalizers: []string{core.Finalizer},
+		Labels:     map[string]string{core.LabelManagedBy: core.ManagedBy},
+	}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: name,
+		Labels: map[string]string{
+			core.LabelManagedBy: core.ManagedBy,
+			core.LabelOwnerName: name,
+		},
+	}}
+	staleQuota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      core.QuotaName(name),
+			Namespace: name,
+			Labels: map[string]string{
+				core.LabelManagedBy: core.ManagedBy,
+				core.LabelOwnerUID:  "old-uid",
+				core.LabelOwnerName: name,
+			},
+		},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourcePods: resource.MustParse("10"),
+		}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mns, ns, staleQuota).
+		WithStatusSubresource(mns).Build()
+	r := &ManagedNamespaceReconciler{Client: cl}
+
+	if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(staleQuota), &corev1.ResourceQuota{}); err == nil {
+		t.Fatal("stale resource quota should have been deleted")
+	}
+}

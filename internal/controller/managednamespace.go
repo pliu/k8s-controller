@@ -99,11 +99,17 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 	return e
 }
 
-// pruneQuotas deletes owned ResourceQuotas other than keep in the current
-// namespace. keep == "" removes all owned quotas.
+// pruneQuotas deletes managed ResourceQuotas other than keep in the current
+// namespace. keep == "" removes all managed quotas for this name.
+//
+// Matching uses LabelOwnerName (not UID) so a recreated ManagedNamespace can
+// reclaim or clear a quota left behind by a previous CR with the same name.
 func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
 	var list corev1.ResourceQuotaList
-	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
+	if e := r.List(ctx, &list, client.MatchingLabels{
+		core.LabelManagedBy: core.ManagedBy,
+		core.LabelOwnerName: mns.Name,
+	}); e != nil {
 		return e
 	}
 	for i := range list.Items {
