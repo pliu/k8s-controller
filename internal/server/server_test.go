@@ -2,16 +2,9 @@
 package server
 
 import (
-	"context"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	api "github.com/pliu/k8s-controller/api/v1alpha1"
-	"github.com/pliu/k8s-controller/internal/core"
-	"k8s.io/apimachinery/pkg/runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestStaticRoutes(t *testing.T) {
@@ -53,72 +46,13 @@ func TestMetricsPathLabelIsBounded(t *testing.T) {
 	}
 }
 
-func TestDevUserNamespaceLifecycle(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := api.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
-	h := (&Server{Client: cl, Dev: true}).Handler()
-
-	create := httptest.NewRequest("POST", "/api/v1/managednamespaces", nil)
-	create.Header.Set("X-Remote-User", "alice")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, create)
-	if rr.Code != 201 {
-		t.Fatalf("create status %d: %s", rr.Code, rr.Body.String())
-	}
-
-	var got api.ManagedNamespace
-	if err := cl.Get(context.Background(), client.ObjectKey{Name: "user-alice"}, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Labels[core.LabelDeleteNamespace] != "true" {
-		t.Fatalf("cleanup label = %q", got.Labels[core.LabelDeleteNamespace])
-	}
-	if len(got.Spec.AccessMappings) != 1 || len(got.Spec.AccessMappings[0].Users) != 1 || got.Spec.AccessMappings[0].Users[0] != "alice" {
-		t.Fatalf("access mappings = %#v", got.Spec.AccessMappings)
-	}
-	if roles := got.Spec.AccessMappings[0].ClusterRoles; len(roles) != 1 || roles[0] != "cluster-admin" {
-		t.Fatalf("cluster roles = %#v", roles)
-	}
-
-	remove := httptest.NewRequest("DELETE", "/api/v1/managednamespaces", nil)
-	remove.Header.Set("X-Remote-User", "alice")
-	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, remove)
-	if rr.Code != 204 {
-		t.Fatalf("delete status %d: %s", rr.Code, rr.Body.String())
-	}
-	if err := cl.Get(context.Background(), client.ObjectKey{Name: "user-alice"}, &got); err == nil {
-		t.Fatal("ManagedNamespace still exists")
-	}
-}
-
-func TestDevUserNamespaceRejectsInvalidUser(t *testing.T) {
-	scheme := runtime.NewScheme()
-	if err := api.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
-	}
-	h := (&Server{Client: fake.NewClientBuilder().WithScheme(scheme).Build(), Dev: true}).Handler()
-	for _, username := range []string{"", "Alice@example.com"} {
-		req := httptest.NewRequest("POST", "/api/v1/managednamespaces", nil)
-		req.Header.Set("X-Remote-User", username)
-		rr := httptest.NewRecorder()
-		h.ServeHTTP(rr, req)
-		if rr.Code != 400 {
-			t.Fatalf("username %q: status %d", username, rr.Code)
-		}
-	}
-}
-
-func TestDevEndpointsAreDisabledByDefault(t *testing.T) {
+func TestMutationEndpointsAreUnavailable(t *testing.T) {
 	h := (&Server{}).Handler()
-	req := httptest.NewRequest("POST", "/api/v1/managednamespaces", nil)
-	req.Header.Set("X-Remote-User", "alice")
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-	if rr.Code != 404 {
-		t.Fatalf("status %d, want 404", rr.Code)
+	for _, method := range []string{"POST", "DELETE"} {
+		rr := httptest.NewRecorder()
+		h.ServeHTTP(rr, httptest.NewRequest(method, "/api/v1/managednamespaces", nil))
+		if rr.Code != 404 {
+			t.Errorf("%s status %d, want 404", method, rr.Code)
+		}
 	}
 }
