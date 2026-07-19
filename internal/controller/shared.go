@@ -2,6 +2,7 @@
 package controller
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/pliu/k8s-controller/internal/core"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // Helpers shared by the ManagedNamespace and ClusterAccessMapping reconcilers,
@@ -40,4 +43,17 @@ func subjectKey(am api.AccessMapping) string {
 // can be detected and stale objects cleaned up without adopting anything else.
 func ownerLabels(uid types.UID, name string) map[string]string {
 	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
+}
+
+// ownerRequests maps a generated object carrying ownerLabels back to the
+// cluster-scoped custom resource named by its owner-name label.
+func ownerRequests(_ context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetLabels()[core.LabelManagedBy] != core.ManagedBy {
+		return nil
+	}
+	name := obj.GetLabels()[core.LabelOwnerName]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }

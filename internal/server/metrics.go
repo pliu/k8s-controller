@@ -4,7 +4,6 @@ package server
 import (
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -36,15 +35,18 @@ type statusRecorder struct {
 
 func (s *statusRecorder) WriteHeader(c int) { s.code = c; s.ResponseWriter.WriteHeader(c) }
 
-// instrument records request count and latency. Static assets are lumped under
-// one label to keep cardinality bounded to the fixed route set.
+// instrument records request count and latency. Only the fixed route set gets
+// its own label; everything else (static assets, unknown paths) is lumped under
+// one value so arbitrary request paths cannot grow the label set unbounded.
 func instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
 		start := time.Now()
 		next.ServeHTTP(rec, r)
 		path := r.URL.Path
-		if !strings.HasPrefix(path, "/api/") && path != "/livez" && path != "/metrics" {
+		switch path {
+		case "/livez", "/metrics", "/api/v1/managednamespaces", "/api/v1/clusteraccessmappings":
+		default:
 			path = "static"
 		}
 		httpRequests.WithLabelValues(path, strconv.Itoa(rec.code)).Inc()

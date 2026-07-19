@@ -10,7 +10,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -135,21 +134,10 @@ func (r *ClusterAccessReconciler) all(ctx context.Context, _ client.Object) []re
 	return o
 }
 
-func (r *ClusterAccessReconciler) owner(_ context.Context, obj client.Object) []reconcile.Request {
-	if obj.GetLabels()[core.LabelManagedBy] != core.ManagedBy {
-		return nil
-	}
-	name := obj.GetLabels()[core.LabelOwnerName]
-	if name == "" {
-		return nil
-	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
-}
-
 func (r *ClusterAccessReconciler) Setup(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
 		For(&api.ClusterAccessMapping{}).
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.all)).
-		Watches(&rbacv1.ClusterRoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
+		Watches(&rbacv1.ClusterRoleBinding{}, handler.EnqueueRequestsFromMapFunc(ownerRequests)).
 		Complete(r)
 }

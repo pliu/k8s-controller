@@ -224,23 +224,12 @@ func (r *ManagedNamespaceReconciler) all(ctx context.Context, _ client.Object) [
 	return o
 }
 
-func (r *ManagedNamespaceReconciler) owner(_ context.Context, obj client.Object) []reconcile.Request {
-	if obj.GetLabels()[core.LabelManagedBy] != core.ManagedBy {
-		return nil
-	}
-	name := obj.GetLabels()[core.LabelOwnerName]
-	if name == "" {
-		return nil
-	}
-	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
-}
-
 func (r *ManagedNamespaceReconciler) Setup(m ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(m).
 		For(&api.ManagedNamespace{}).
 		Watches(&rbacv1.ClusterRole{}, handler.EnqueueRequestsFromMapFunc(r.all)).
-		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
-		Watches(&corev1.ResourceQuota{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
-		Watches(&rbacv1.RoleBinding{}, handler.EnqueueRequestsFromMapFunc(r.owner)).
+		Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(ownerRequests)).
+		Watches(&corev1.ResourceQuota{}, handler.EnqueueRequestsFromMapFunc(ownerRequests)).
+		Watches(&rbacv1.RoleBinding{}, handler.EnqueueRequestsFromMapFunc(ownerRequests)).
 		Complete(r)
 }
