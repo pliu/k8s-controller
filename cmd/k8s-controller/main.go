@@ -23,7 +23,6 @@ import (
 func main() {
 	runController := flag.Bool("controller", false, "run the reconciler (default: run both when neither -controller nor -server is given)")
 	runServer := flag.Bool("server", false, "run the HTTP API and UI (default: run both when neither -controller nor -server is given)")
-	dev := flag.Bool("dev", false, "enable user namespace creation and deletion endpoints (development only)")
 	syncPeriod := flag.Duration("sync-period", time.Hour, "interval at which the reconciler re-syncs every ManagedNamespace as a drift-repair safety net")
 	listen := flag.String("listen", ":8080", "address the HTTP server (UI, API, and /metrics) binds; controller-only mode serves /metrics here instead")
 	flag.Parse()
@@ -41,7 +40,7 @@ func main() {
 	// The HTTP server is stateless and needs neither a manager nor leader
 	// election, so run it directly when the reconciler is not also enabled.
 	if serverEnabled && !controllerEnabled {
-		if e := serve(ctx, cfg, scheme, *listen, *dev); e != nil {
+		if e := serve(ctx, cfg, scheme, *listen); e != nil {
 			panic(e)
 		}
 		return
@@ -68,7 +67,7 @@ func main() {
 	if serverEnabled {
 		// Register as a non-leader-election runnable so the API is served by
 		// every replica, not only the one holding the reconciler lease.
-		if e = mgr.Add(&serverRunnable{cfg: cfg, scheme: scheme, addr: *listen, dev: *dev}); e != nil {
+		if e = mgr.Add(&serverRunnable{cfg: cfg, scheme: scheme, addr: *listen}); e != nil {
 			panic(e)
 		}
 	}
@@ -83,20 +82,19 @@ type serverRunnable struct {
 	cfg    *rest.Config
 	scheme *runtime.Scheme
 	addr   string
-	dev    bool
 }
 
 func (*serverRunnable) NeedLeaderElection() bool { return false }
 func (r *serverRunnable) Start(ctx context.Context) error {
-	return serve(ctx, r.cfg, r.scheme, r.addr, r.dev)
+	return serve(ctx, r.cfg, r.scheme, r.addr)
 }
 
-func serve(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme, addr string, dev bool) error {
+func serve(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme, addr string) error {
 	cl, e := client.New(cfg, client.Options{Scheme: scheme})
 	if e != nil {
 		return e
 	}
-	app := &s.Server{Client: cl, Dev: dev}
+	app := &s.Server{Client: cl}
 	httpServer := &http.Server{Addr: addr, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {
 		<-ctx.Done()

@@ -21,11 +21,9 @@ import (
 
 // ManagedNamespaceReconciler keeps the Namespace, ResourceQuota, and
 // RoleBindings implied by each ManagedNamespace in sync. It creates the
-// namespace if missing. On ManagedNamespace deletion, the quota and bindings
-// it owns are removed; the namespace is retained unless the ManagedNamespace
-// carries the opt-in deletion label used by the development API. Referenced
-// ClusterRoles are not managed here; a missing one fails closed and is reported
-// in status.
+// namespace if missing but never deletes it: on ManagedNamespace deletion only
+// the quota and bindings it owns are removed. Referenced ClusterRoles are not
+// managed here; a missing one fails closed and is reported in status.
 type ManagedNamespaceReconciler struct{ client.Client }
 
 func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
@@ -40,12 +38,7 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		if e := r.pruneQuotas(ctx, &mns, ""); e != nil {
 			return ctrl.Result{}, e
 		}
-		if mns.Labels[core.LabelDeleteNamespace] == "true" {
-			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
-			if e := client.IgnoreNotFound(r.Delete(ctx, ns)); e != nil {
-				return ctrl.Result{}, e
-			}
-		}
+		// The namespace is intentionally left in place.
 		invalidReferences.DeleteLabelValues("managednamespace", mns.Name)
 		base := mns.DeepCopy()
 		controllerutil.RemoveFinalizer(&mns, core.Finalizer)

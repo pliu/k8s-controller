@@ -8,9 +8,9 @@ one per namespace). It carries an optional `ResourceQuota` and a list of
 `accessMappings`; each mapping binds a single **group** or a list of **users** to
 a set of ClusterRoles. The operator keeps three things in sync:
 
-- **the Namespace** — created if missing and labeled managed. It is normally
-  retained when its `ManagedNamespace` is deleted; objects created through the
-  optional development API opt into deleting the namespace as well.
+- **the Namespace** — created if missing and labeled managed. It is never deleted
+  by the operator; deleting a `ManagedNamespace` removes only the quota and
+  bindings it owns, leaving the namespace and its workloads in place.
 - **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
   the field is removed).
 - **RoleBindings** in that namespace — one per `(accessMapping, clusterRole)`,
@@ -44,14 +44,6 @@ served by every replica. Reconciliation is watch-driven; `-sync-period` (default
 `1h`) sets how often every `ManagedNamespace` is re-synced as a drift-repair
 safety net. `-listen` (default `:8080`) sets the HTTP bind address.
 
-Passing `-dev` enables `POST /api/v1/managednamespaces` and
-`DELETE /api/v1/managednamespaces`. Both derive the caller from the
-`X-Remote-User` header. POST creates `user-<username>` with a namespace-scoped
-`cluster-admin` mapping for that user; DELETE removes that `ManagedNamespace`.
-Unlike ordinary managed namespaces, these development objects are labeled so
-the reconciler also deletes their Namespace during cleanup. Only expose this
-mode behind a proxy that sets and protects `X-Remote-User`.
-
 Prometheus metrics are served at `/metrics` on the listen address in every mode,
 from one shared registry: controller-runtime's reconcile/workqueue/client
 series, Go and process collectors, the viewer's request count and latency
@@ -67,10 +59,9 @@ with three views: a **Namespaces** list where selecting a namespace shows its
 ResourceQuota and permission mappings (users/groups → ClusterRoles), a **Cluster
 access** view listing the cluster-wide mappings, and a **Search** view that,
 given a username or group, lists the namespaces (and any cluster-wide scope) and
-ClusterRoles they are granted. By default it performs no writes, and it never
-performs authentication itself; restrict access to it with a NetworkPolicy or
-an authenticating proxy as your environment requires. The `group` values must
-match the stable group identifiers your cluster's authenticator asserts to
-kube-apiserver.
+ClusterRoles they are granted. It performs no writes and no authentication;
+restrict access to it with a NetworkPolicy or an authenticating proxy as your
+environment requires. The `group` values must match the stable group identifiers
+your cluster's authenticator asserts to kube-apiserver.
 
 The project is licensed under GNU AGPL version 3 only.
