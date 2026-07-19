@@ -9,10 +9,11 @@ one per namespace). It carries an optional `ResourceQuota` and a list of
 a set of ClusterRoles. The operator keeps three things in sync:
 
 - **the Namespace** — created if missing and labeled managed. It is never deleted
-  by the operator; deleting a `ManagedNamespace` removes only the quota and
-  bindings it owns, leaving the namespace and its workloads in place.
+  by the operator; deleting a `ManagedNamespace` removes only the RoleBindings
+  it owns, leaving the namespace, its ResourceQuota, and workloads in place.
 - **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
-  the field is removed).
+  the field is removed while the `ManagedNamespace` still exists; retained when
+  the `ManagedNamespace` itself is deleted).
 - **RoleBindings** in that namespace — one per `(accessMapping, clusterRole)`,
   with the group or users as `User`/`Group` subjects bound directly, so
   Kubernetes evaluates them against the authenticated identity on every request.

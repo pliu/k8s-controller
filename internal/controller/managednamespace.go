@@ -21,9 +21,11 @@ import (
 
 // ManagedNamespaceReconciler keeps the Namespace, ResourceQuota, and
 // RoleBindings implied by each ManagedNamespace in sync. It creates the
-// namespace if missing but never deletes it: on ManagedNamespace deletion only
-// the quota and bindings it owns are removed. Referenced ClusterRoles are not
-// managed here; a missing one fails closed and is reported in status.
+// namespace if missing but never deletes it: on ManagedNamespace deletion the
+// RoleBindings it owns are removed, while the Namespace and any ResourceQuota
+// are left in place so existing workloads keep their resource limits.
+// Referenced ClusterRoles are not managed here; a missing one fails closed and
+// is reported in status.
 type ManagedNamespaceReconciler struct{ client.Client }
 
 func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
@@ -35,10 +37,7 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		if e := r.pruneBindings(ctx, &mns, nil); e != nil {
 			return ctrl.Result{}, e
 		}
-		if e := r.pruneQuotas(ctx, &mns, ""); e != nil {
-			return ctrl.Result{}, e
-		}
-		// The namespace is intentionally left in place.
+		// The namespace and its ResourceQuota are intentionally left in place.
 		invalidReferences.DeleteLabelValues("managednamespace", mns.Name)
 		base := mns.DeepCopy()
 		controllerutil.RemoveFinalizer(&mns, core.Finalizer)
@@ -100,11 +99,17 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 	return e
 }
 
-// pruneQuotas deletes owned ResourceQuotas other than keep in the current
-// namespace. keep == "" removes all owned quotas.
+// pruneQuotas deletes managed ResourceQuotas other than keep in the current
+// namespace. keep == "" removes all managed quotas for this name.
+//
+// Matching uses LabelOwnerName (not UID) so a recreated ManagedNamespace can
+// reclaim or clear a quota left behind by a previous CR with the same name.
 func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
 	var list corev1.ResourceQuotaList
-	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
+	if e := r.List(ctx, &list, client.MatchingLabels{
+		core.LabelManagedBy: core.ManagedBy,
+		core.LabelOwnerName: mns.Name,
+	}); e != nil {
 		return e
 	}
 	for i := range list.Items {
