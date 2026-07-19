@@ -42,6 +42,17 @@ func TestStaticRoutes(t *testing.T) {
 	}
 }
 
+func TestMetricsPathLabelIsBounded(t *testing.T) {
+	h := (&Server{}).Handler()
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/api/v1/bogus-metrics-label", nil))
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
+	if strings.Contains(rr.Body.String(), "bogus-metrics-label") {
+		t.Fatal("arbitrary request path leaked into metric labels")
+	}
+}
+
 func TestDevUserNamespaceLifecycle(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := api.AddToScheme(scheme); err != nil {
