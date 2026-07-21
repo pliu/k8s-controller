@@ -43,7 +43,8 @@ type ManagedNamespaceSpec struct {
 	// precedence on conflicts.
 	Labels map[string]string `json:"labels,omitempty"`
 	// Annotations are applied to the managed Namespace and kept in sync.
-	// Annotations managed by other actors are preserved.
+	// Annotations managed by other actors are preserved; controller-owned
+	// annotations take precedence on conflicts.
 	Annotations map[string]string `json:"annotations,omitempty"`
 	// ResourceQuota, when set, is applied to the namespace; clearing it removes
 	// the managed quota.

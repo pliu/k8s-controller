@@ -74,7 +74,8 @@ spec:
                   type: string
                 description: |-
                   Annotations are applied to the managed Namespace and kept in sync.
-                  Annotations managed by other actors are preserved.
+                  Annotations managed by other actors are preserved; controller-owned
+                  annotations take precedence on conflicts.
                 type: object
               labels:
                 additionalProperties:

@@ -10,10 +10,11 @@ single **group** or a list of **users** to a set of ClusterRoles. The operator
 keeps three things in sync:
 
 - **the Namespace** — created if missing with the requested labels and
-  annotations, which are kept in sync without removing metadata owned by other
-  actors. It is never deleted by the operator; deleting a `ManagedNamespace`
-  removes only the RoleBindings it owns, leaving the namespace, its
-  ResourceQuota, and workloads in place.
+  annotations. Requested keys are adopted, kept in sync, and removed when they
+  leave the spec; metadata never requested by the `ManagedNamespace` is
+  preserved. It is never deleted by the operator; deleting a
+  `ManagedNamespace` removes only the RoleBindings it owns, leaving the
+  namespace, its ResourceQuota, and workloads in place.
 - **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
   the field is removed while the `ManagedNamespace` still exists; retained when
   the `ManagedNamespace` itself is deleted).

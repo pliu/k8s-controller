@@ -29,14 +29,22 @@ func TestManagedNamespaceMetadataStaysInSync(t *testing.T) {
 	mns := &api.ManagedNamespace{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: api.ManagedNamespaceSpec{
-			Labels:      map[string]string{"team": "a", "remove-label": "old"},
-			Annotations: map[string]string{"contact": "alice", "remove-annotation": "old"},
+			Labels:      map[string]string{"team": "a"},
+			Annotations: map[string]string{"contact": "alice"},
 		},
 	}
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
-		Name:        name,
-		Labels:      map[string]string{"external-label": "keep"},
-		Annotations: map[string]string{"external-annotation": "keep"},
+		Name: name,
+		Labels: map[string]string{
+			"external-label":     "keep",
+			"existing-different": "namespace",
+			"existing-same":      "same",
+		},
+		Annotations: map[string]string{
+			"external-annotation": "keep",
+			"existing-different":  "namespace",
+			"existing-same":       "same",
+		},
 	}}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
 	r := &ManagedNamespaceReconciler{Client: cl}
@@ -45,16 +53,63 @@ func TestManagedNamespaceMetadataStaysInSync(t *testing.T) {
 	if err := r.ensureNamespace(ctx, mns); err != nil {
 		t.Fatal(err)
 	}
+	var got corev1.Namespace
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Existing keys are untouched until the ManagedNamespace requests them.
+	if got.Labels["existing-different"] != "namespace" || got.Labels["existing-same"] != "same" {
+		t.Fatalf("unmanaged labels were not preserved: %#v", got.Labels)
+	}
+	if got.Annotations["existing-different"] != "namespace" || got.Annotations["existing-same"] != "same" {
+		t.Fatalf("unmanaged annotations were not preserved: %#v", got.Annotations)
+	}
+
+	mns.Spec.Labels["existing-different"] = "managed"
+	mns.Spec.Labels["existing-same"] = "same"
+	mns.Spec.Annotations["existing-different"] = "managed"
+	mns.Spec.Annotations["existing-same"] = "same"
+	if err := r.ensureNamespace(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Adding an existing key adopts it, whether its old value differs or not.
+	if got.Labels["existing-different"] != "managed" || got.Labels["existing-same"] != "same" {
+		t.Fatalf("pre-existing labels were not reconciled: %#v", got.Labels)
+	}
+	if got.Annotations["existing-different"] != "managed" || got.Annotations["existing-same"] != "same" {
+		t.Fatalf("pre-existing annotations were not reconciled: %#v", got.Annotations)
+	}
+
+	got.Labels["team"] = "drifted"
+	got.Annotations["contact"] = "drifted"
+	if err := cl.Update(ctx, &got); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensureNamespace(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
+		t.Fatal(err)
+	}
+	// Out-of-band changes to adopted keys are repaired.
+	if got.Labels["team"] != "a" || got.Annotations["contact"] != "alice" {
+		t.Fatalf("metadata drift was not repaired: labels=%#v annotations=%#v", got.Labels, got.Annotations)
+	}
+
 	mns.Spec.Labels = map[string]string{"team": "b"}
 	mns.Spec.Annotations = map[string]string{"contact": "bob"}
 	if err := r.ensureNamespace(ctx, mns); err != nil {
 		t.Fatal(err)
 	}
 
-	var got corev1.Namespace
 	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
 		t.Fatal(err)
 	}
+	// Removing adopted keys from the spec removes them from the Namespace,
+	// while keys that were never requested remain.
 	wantLabels := map[string]string{
 		"external-label":    "keep",
 		"team":              "b",
@@ -65,6 +120,7 @@ func TestManagedNamespaceMetadataStaysInSync(t *testing.T) {
 		t.Errorf("labels = %#v, want %#v", got.Labels, wantLabels)
 	}
 	wantAnnotations := map[string]string{"external-annotation": "keep", "contact": "bob"}
+	wantAnnotations[core.AnnotationManagedMetadata] = `{"labels":["team"],"annotations":["contact"]}`
 	if !reflect.DeepEqual(got.Annotations, wantAnnotations) {
 		t.Errorf("annotations = %#v, want %#v", got.Annotations, wantAnnotations)
 	}
@@ -85,7 +141,10 @@ func TestManagedNamespaceMetadataStaysInSync(t *testing.T) {
 	if !reflect.DeepEqual(got.Labels, wantLabels) {
 		t.Errorf("labels after clearing spec = %#v, want %#v", got.Labels, wantLabels)
 	}
-	wantAnnotations = map[string]string{"external-annotation": "keep"}
+	wantAnnotations = map[string]string{
+		"external-annotation":          "keep",
+		core.AnnotationManagedMetadata: `{}`,
+	}
 	if !reflect.DeepEqual(got.Annotations, wantAnnotations) {
 		t.Errorf("annotations after clearing spec = %#v, want %#v", got.Annotations, wantAnnotations)
 	}
