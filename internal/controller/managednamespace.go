@@ -3,6 +3,7 @@ package controller
 
 import (
 	"context"
+	"maps"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -12,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1apply "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -67,16 +69,17 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 }
 
 func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
-		if ns.Labels == nil {
-			ns.Labels = map[string]string{}
-		}
-		ns.Labels[core.LabelManagedBy] = core.ManagedBy
-		ns.Labels[core.LabelOwnerName] = mns.Name
-		return nil
-	})
-	return e
+	labels := maps.Clone(mns.Spec.Labels)
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[core.LabelManagedBy] = core.ManagedBy
+	labels[core.LabelOwnerName] = mns.Name
+
+	ns := corev1apply.Namespace(mns.Name).
+		WithLabels(labels).
+		WithAnnotations(mns.Spec.Annotations)
+	return r.Apply(ctx, ns, client.FieldOwner(core.ManagedBy), client.ForceOwnership)
 }
 
 func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {

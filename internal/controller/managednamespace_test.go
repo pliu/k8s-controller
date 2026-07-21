@@ -3,6 +3,7 @@ package controller
 
 import (
 	"context"
+	"reflect"
 	"testing"
 	"time"
 
@@ -18,6 +19,77 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+func TestManagedNamespaceMetadataStaysInSync(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	name := "team-a"
+	mns := &api.ManagedNamespace{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: api.ManagedNamespaceSpec{
+			Labels:      map[string]string{"team": "a", "remove-label": "old"},
+			Annotations: map[string]string{"contact": "alice", "remove-annotation": "old"},
+		},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:        name,
+		Labels:      map[string]string{"external-label": "keep"},
+		Annotations: map[string]string{"external-annotation": "keep"},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
+	r := &ManagedNamespaceReconciler{Client: cl}
+	ctx := context.Background()
+
+	if err := r.ensureNamespace(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	mns.Spec.Labels = map[string]string{"team": "b"}
+	mns.Spec.Annotations = map[string]string{"contact": "bob"}
+	if err := r.ensureNamespace(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+
+	var got corev1.Namespace
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantLabels := map[string]string{
+		"external-label":    "keep",
+		"team":              "b",
+		core.LabelManagedBy: core.ManagedBy,
+		core.LabelOwnerName: name,
+	}
+	if !reflect.DeepEqual(got.Labels, wantLabels) {
+		t.Errorf("labels = %#v, want %#v", got.Labels, wantLabels)
+	}
+	wantAnnotations := map[string]string{"external-annotation": "keep", "contact": "bob"}
+	if !reflect.DeepEqual(got.Annotations, wantAnnotations) {
+		t.Errorf("annotations = %#v, want %#v", got.Annotations, wantAnnotations)
+	}
+
+	mns.Spec.Labels = nil
+	mns.Spec.Annotations = nil
+	if err := r.ensureNamespace(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(ns), &got); err != nil {
+		t.Fatal(err)
+	}
+	wantLabels = map[string]string{
+		"external-label":    "keep",
+		core.LabelManagedBy: core.ManagedBy,
+		core.LabelOwnerName: name,
+	}
+	if !reflect.DeepEqual(got.Labels, wantLabels) {
+		t.Errorf("labels after clearing spec = %#v, want %#v", got.Labels, wantLabels)
+	}
+	wantAnnotations = map[string]string{"external-annotation": "keep"}
+	if !reflect.DeepEqual(got.Annotations, wantAnnotations) {
+		t.Errorf("annotations after clearing spec = %#v, want %#v", got.Annotations, wantAnnotations)
+	}
+}
 
 func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 	scheme := runtime.NewScheme()
