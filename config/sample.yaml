@@ -7,6 +7,10 @@ apiVersion: k8s.pliu.dev/v1alpha1
 kind: ManagedNamespace
 metadata: {name: team-a}
 spec:
+  labels:
+    owner: platform-team
+  annotations:
+    example.com/contact: platform@example.com
   resourceQuota:
     hard:
       pods: "50"

@@ -69,6 +69,22 @@ spec:
                     rule: (has(self.group) && size(self.group) > 0) != (has(self.users)
                       && size(self.users) > 0)
                 type: array
+              annotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Annotations are applied to the managed Namespace and kept in sync.
+                  Annotations managed by other actors are preserved; controller-owned
+                  annotations take precedence on conflicts.
+                type: object
+              labels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Labels are applied to the managed Namespace and kept in sync. Labels
+                  managed by other actors are preserved; controller-owned labels take
+                  precedence on conflicts.
+                type: object
               resourceQuota:
                 description: |-
                   ResourceQuota, when set, is applied to the namespace; clearing it removes

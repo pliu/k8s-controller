@@ -38,6 +38,14 @@ type ResourceQuota struct {
 // resource's own name is the namespace name, so there is exactly one
 // ManagedNamespace per namespace.
 type ManagedNamespaceSpec struct {
+	// Labels are applied to the managed Namespace and kept in sync. Labels
+	// managed by other actors are preserved; controller-owned labels take
+	// precedence on conflicts.
+	Labels map[string]string `json:"labels,omitempty"`
+	// Annotations are applied to the managed Namespace and kept in sync.
+	// Annotations managed by other actors are preserved; controller-owned
+	// annotations take precedence on conflicts.
+	Annotations map[string]string `json:"annotations,omitempty"`
 	// ResourceQuota, when set, is applied to the namespace; clearing it removes
 	// the managed quota.
 	ResourceQuota  *ResourceQuota  `json:"resourceQuota,omitempty"`

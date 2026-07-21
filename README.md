@@ -4,13 +4,17 @@ k8s-controller reconciles a namespace and everything it grants from a single
 `ManagedNamespace` custom resource.
 
 A `ManagedNamespace`'s own name is the namespace it manages (so there is exactly
-one per namespace). It carries an optional `ResourceQuota` and a list of
-`accessMappings`; each mapping binds a single **group** or a list of **users** to
-a set of ClusterRoles. The operator keeps three things in sync:
+one per namespace). It carries optional Namespace `labels` and `annotations`, an
+optional `ResourceQuota`, and a list of `accessMappings`; each mapping binds a
+single **group** or a list of **users** to a set of ClusterRoles. The operator
+keeps three things in sync:
 
-- **the Namespace** — created if missing and labeled managed. It is never deleted
-  by the operator; deleting a `ManagedNamespace` removes only the RoleBindings
-  it owns, leaving the namespace, its ResourceQuota, and workloads in place.
+- **the Namespace** — created if missing with the requested labels and
+  annotations. Requested keys are adopted, kept in sync, and removed when they
+  leave the spec; metadata never requested by the `ManagedNamespace` is
+  preserved. It is never deleted by the operator; deleting a
+  `ManagedNamespace` removes only the RoleBindings it owns, leaving the
+  namespace, its ResourceQuota, and workloads in place.
 - **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
   the field is removed while the `ManagedNamespace` still exists; retained when
   the `ManagedNamespace` itself is deleted).

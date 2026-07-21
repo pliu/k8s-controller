@@ -3,6 +3,10 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"slices"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -69,14 +73,62 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
 	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+		previous, e := namespaceMetadataInventory(ns)
+		if e != nil {
+			return e
+		}
+		for _, key := range previous.Labels {
+			delete(ns.Labels, key)
+		}
+		for _, key := range previous.Annotations {
+			delete(ns.Annotations, key)
+		}
+
 		if ns.Labels == nil {
 			ns.Labels = map[string]string{}
 		}
+		maps.Copy(ns.Labels, mns.Spec.Labels)
 		ns.Labels[core.LabelManagedBy] = core.ManagedBy
 		ns.Labels[core.LabelOwnerName] = mns.Name
+
+		if ns.Annotations == nil {
+			ns.Annotations = map[string]string{}
+		}
+		maps.Copy(ns.Annotations, mns.Spec.Annotations)
+		inventory := namespaceMetadata{
+			Labels:      slices.Sorted(maps.Keys(mns.Spec.Labels)),
+			Annotations: slices.Sorted(maps.Keys(mns.Spec.Annotations)),
+		}
+		// The inventory annotation is controller-owned, even if the same key
+		// was supplied in spec.annotations.
+		inventory.Annotations = slices.DeleteFunc(inventory.Annotations, func(key string) bool {
+			return key == core.AnnotationManagedMetadata
+		})
+		data, e := json.Marshal(inventory)
+		if e != nil {
+			return e
+		}
+		ns.Annotations[core.AnnotationManagedMetadata] = string(data)
 		return nil
 	})
 	return e
+}
+
+type namespaceMetadata struct {
+	Labels      []string `json:"labels,omitempty"`
+	Annotations []string `json:"annotations,omitempty"`
+}
+
+func namespaceMetadataInventory(ns *corev1.Namespace) (namespaceMetadata, error) {
+	var inventory namespaceMetadata
+	data := ns.Annotations[core.AnnotationManagedMetadata]
+	if data == "" {
+		return inventory, nil
+	}
+	if e := json.Unmarshal([]byte(data), &inventory); e != nil {
+		return inventory, fmt.Errorf("decode %s annotation on Namespace %q: %w", core.AnnotationManagedMetadata, ns.Name, e)
+	}
+	return inventory, nil
 }
 
 func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {
