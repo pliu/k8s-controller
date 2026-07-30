@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: Apache-2.0
 //
 // Read-only viewer for ManagedNamespaces and ClusterAccessMappings. Every tab is
 // derived from the list endpoints; nothing is mutated. All cluster-supplied

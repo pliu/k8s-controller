@@ -69,4 +69,4 @@ restrict access to it with a NetworkPolicy or an authenticating proxy as your
 environment requires. The `group` values must match the stable group identifiers
 your cluster's authenticator asserts to kube-apiserver.
 
-The project is licensed under GNU AGPL version 3 only.
+The project is licensed under the Apache License, Version 2.0.
