@@ -72,3 +72,69 @@ grep -q k8s_controller_http_requests_total <<<"$metrics"
 # An ordinary ManagedNamespace retains its Namespace when it is deleted.
 kubectl delete managednamespace team-a --wait=true --timeout=60s
 kubectl get namespace team-a >/dev/null
+
+# Bindings only get cleaned up by the finalizer, so tearing the operator down
+# before its custom resources -- then force-removing finalizers to unstick them
+# -- leaves live grants behind. A successor under the same name must reclaim
+# them: generated names derive from the owner's name, so the bindings it still
+# wants are adopted and the ones it no longer wants are pruned. Identifying the
+# owner any more narrowly than by name would leave the dropped grant in place.
+bindings() {
+  kubectl -n team-b get rolebinding -l "k8s.pliu.dev/owner-name=team-b" \
+    -o jsonpath='{range .items[*]}{.roleRef.name}{"\n"}{end}' 2>/dev/null | sort || true
+}
+both=$(printf 'pod-reader\nview')
+
+kubectl apply -f - <<'YAML'
+apiVersion: k8s.pliu.dev/v1alpha1
+kind: ManagedNamespace
+metadata: {name: team-b}
+spec:
+  accessMappings:
+    - group: team-b-readers
+      clusterRoles: [pod-reader, view]
+YAML
+for _ in {1..30}; do
+  [ "$(bindings)" = "$both" ] && break
+  sleep 1
+done
+[ "$(bindings)" = "$both" ]
+
+# Stop the operator so the finalizer cannot run, then force the resource out.
+kubectl -n k8s-controller scale deployment/k8s-controller --replicas=0
+for _ in {1..60}; do
+  kubectl -n k8s-controller get pod -l app=k8s-controller -o name | grep -q . || break
+  sleep 1
+done
+kubectl delete managednamespace team-b --wait=false
+kubectl patch managednamespace team-b --type=merge -p '{"metadata":{"finalizers":[]}}'
+for _ in {1..30}; do
+  kubectl get managednamespace team-b >/dev/null 2>&1 || break
+  sleep 1
+done
+! kubectl get managednamespace team-b >/dev/null 2>&1
+# Both grants outlived their owner.
+[ "$(bindings)" = "$both" ]
+
+kubectl -n k8s-controller scale deployment/k8s-controller --replicas=3
+kubectl -n k8s-controller rollout status deployment/k8s-controller --timeout=180s
+# With no owner left there is nothing to reconcile, so the operator coming back
+# does not sweep them: only a successor can. This is why the README says to
+# delete the custom resources before removing the operator.
+[ "$(bindings)" = "$both" ]
+
+kubectl apply -f - <<'YAML'
+apiVersion: k8s.pliu.dev/v1alpha1
+kind: ManagedNamespace
+metadata: {name: team-b}
+spec:
+  accessMappings:
+    - group: team-b-readers
+      clusterRoles: [pod-reader]
+YAML
+for _ in {1..60}; do
+  [ "$(bindings)" = "pod-reader" ] && break
+  sleep 1
+done
+# The kept grant was adopted and the dropped one reclaimed and pruned.
+[ "$(bindings)" = "pod-reader" ]
