@@ -35,6 +35,39 @@ closed. Policy is authored with `kubectl` or GitOps against the
 `ManagedNamespace` and ClusterRole objects directly; the bundled HTTP server is a
 read-only viewer.
 
+## Security model
+
+Both `ManagedNamespace` and `ClusterAccessMapping` are cluster-scoped, and write
+access to either is equivalent to cluster-admin. The operator holds `bind` on
+all ClusterRoles — the permission that exempts it from RBAC's
+privilege-escalation check — so a mapping may reference any ClusterRole,
+`cluster-admin` included, and bind it to any user or group. Restrict `create`,
+`update`, and `patch` on both kinds to cluster administrators or to the GitOps
+pipeline that owns cluster policy.
+
+Being cluster-scoped, neither kind can be delegated per namespace with RBAC
+alone. A ClusterRole with `resourceNames` can grant a team `get` and `patch` on
+one pre-provisioned `ManagedNamespace`, but RBAC cannot restrict `create` by
+name — the object name is not known to the authorizer for that verb — so
+letting a team create its own is letting it create any, including one named
+after a namespace they do not own. To hand these resources to teams, gate them
+with a ValidatingAdmissionPolicy that ties `metadata.name` to the requester and
+constrains `clusterRoles` to an allowlist.
+
+Managing system namespaces and owning Pod Security Admission labels are both
+intended uses, so neither namespace names nor label keys are restricted. Three
+consequences deserve care. A `metadata.name` matching an existing namespace
+adopts that namespace rather than failing, so a typo is a live change to a
+namespace you did not mean to touch. A label the operator has adopted and then
+loses from `spec.labels` is deleted from the namespace, not reverted to its
+previous value — dropping a `pod-security.kubernetes.io/enforce` key from a spec
+that once carried it leaves the namespace with no enforcement at all, which is
+more permissive than where it started. And a `spec.resourceQuota` on a system
+namespace makes the API server reject pods that omit resource requests, which
+can keep cluster components from scheduling; since the quota is retained when
+the `ManagedNamespace` is deleted, backing that out means deleting the
+ResourceQuota by hand.
+
 ```sh
 make verify
 make kind-test # requires Docker, kind, and kubectl
