@@ -14,7 +14,13 @@ keeps three things in sync:
   leave the spec; metadata never requested by the `ManagedNamespace` is
   preserved. It is never deleted by the operator; deleting a
   `ManagedNamespace` removes only the RoleBindings it owns, leaving the
-  namespace, its ResourceQuota, and workloads in place.
+  namespace, its ResourceQuota, and workloads in place. Deleting the Namespace
+  itself is not undone in any useful sense: the operator recreates it with the
+  requested metadata, quota, and bindings, because that is all the
+  `ManagedNamespace` describes, while every workload, Secret, and
+  PersistentVolumeClaim it held is gone for good. Take the namespace
+  reappearing as the operator doing its job, not as the deletion being
+  repaired.
 - **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
   the field is removed while the `ManagedNamespace` still exists; retained when
   the `ManagedNamespace` itself is deleted).
