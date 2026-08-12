@@ -3,6 +3,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"sort"
 	"strings"
 
@@ -18,12 +19,25 @@ import (
 // Helpers shared by the ManagedNamespace and ClusterAccessMapping reconcilers,
 // which both turn an AccessMapping's subject set into owned bindings.
 
+// normalizedUsers is an AccessMapping's user list reduced to the set it
+// denotes. Both the generated binding's name and its subject list are derived
+// from this, so that two mappings naming the same users cannot agree on the
+// object to write while disagreeing on its contents: that made each reconcile
+// rewrite the binding, and since the reconcilers watch their own bindings,
+// every rewrite enqueued another reconcile.
+func normalizedUsers(users []string) []string {
+	u := append([]string(nil), users...)
+	sort.Strings(u)
+	return slices.Compact(u)
+}
+
 func subjectsFor(am api.AccessMapping) []rbacv1.Subject {
 	if am.Group != "" {
 		return []rbacv1.Subject{{APIGroup: rbacv1.GroupName, Kind: "Group", Name: am.Group}}
 	}
-	subs := make([]rbacv1.Subject, 0, len(am.Users))
-	for _, u := range am.Users {
+	users := normalizedUsers(am.Users)
+	subs := make([]rbacv1.Subject, 0, len(users))
+	for _, u := range users {
 		subs = append(subs, rbacv1.Subject{APIGroup: rbacv1.GroupName, Kind: "User", Name: u})
 	}
 	return subs
@@ -35,9 +49,7 @@ func subjectKey(am api.AccessMapping) string {
 	if am.Group != "" {
 		return "g:" + am.Group
 	}
-	u := append([]string(nil), am.Users...)
-	sort.Strings(u)
-	return "u:" + core.Hash(strings.Join(u, "\x00"))
+	return "u:" + core.Hash(strings.Join(normalizedUsers(am.Users), "\x00"))
 }
 
 // ownerLabels stamp a generated object with its owning custom resource so drift
