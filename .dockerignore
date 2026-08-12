@@ -1,0 +1,15 @@
+# The image build needs go.mod, go.sum and the Go packages, nothing else.
+# Keeping .git out of the context matters most: without this, every commit or
+# fetch changes the context and invalidates the COPY layer, so each build
+# re-downloads the module graph and recompiles from scratch.
+.git
+.gitignore
+.dockerignore
+Dockerfile
+Makefile
+README.md
+LICENSE
+bin/
+coverage.out
+config/
+hack/
