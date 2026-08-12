@@ -9,6 +9,7 @@ import (
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -43,6 +44,31 @@ func subjectKey(am api.AccessMapping) string {
 // can be detected and stale objects cleaned up without adopting anything else.
 func ownerLabels(uid types.UID, name string) map[string]string {
 	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
+}
+
+// terminal marks the errors that retrying cannot fix. An Invalid response means
+// the API server rejected the object this spec asks for, so the same spec will
+// be rejected identically forever; controller-runtime counts it in
+// controller_runtime_terminal_reconcile_errors_total and stops requeuing it.
+// Editing the spec enqueues a fresh reconcile, and the cache resync still
+// retries every sync-period, so nothing is stuck as a result.
+func terminal(e error) error {
+	if apierrors.IsInvalid(e) {
+		return reconcile.TerminalError(e)
+	}
+	return e
+}
+
+// conditionMessage renders a sync failure for a status condition, bounded well
+// under the API server's 32Ki message limit so that reporting a failure cannot
+// itself fail. The cut is made valid again because it may land mid-rune.
+func conditionMessage(e error) string {
+	const max = 1024
+	m := e.Error()
+	if len(m) > max {
+		m = strings.ToValidUTF8(m[:max], "") + "…"
+	}
+	return m
 }
 
 // ownerRequests maps a generated object carrying ownerLabels back to the

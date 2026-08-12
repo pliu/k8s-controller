@@ -3,6 +3,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -47,6 +48,16 @@ func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request)
 		return ctrl.Result{Requeue: true}, r.Patch(ctx, &cam, client.MergeFrom(base))
 	}
 
+	invalid, syncErr := r.sync(ctx, &cam)
+	// status runs on both paths so a spec the API server rejects is reported on
+	// the object, not only in the controller log.
+	if e := r.status(ctx, &cam, invalid, syncErr); e != nil {
+		return ctrl.Result{}, errors.Join(syncErr, e)
+	}
+	return ctrl.Result{}, terminal(syncErr)
+}
+
+func (r *ClusterAccessReconciler) sync(ctx context.Context, cam *api.ClusterAccessMapping) ([]api.InvalidReference, error) {
 	subjects := subjectsFor(cam.Spec)
 	invalid := []api.InvalidReference{}
 	want := map[string]bool{}
@@ -56,22 +67,22 @@ func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request)
 			var cr rbacv1.ClusterRole
 			if e := r.Get(ctx, client.ObjectKey{Name: role}, &cr); e != nil {
 				if !apierrors.IsNotFound(e) {
-					return ctrl.Result{}, e
+					return nil, e
 				}
 				invalid = append(invalid, api.InvalidReference{ClusterRole: role, Reason: "ClusterRole not found"})
 				continue
 			}
 			name := core.BindingName(cam.Name, key, role)
-			if e := r.ensure(ctx, &cam, name, role, subjects); e != nil {
-				return ctrl.Result{}, e
+			if e := r.ensure(ctx, cam, name, role, subjects); e != nil {
+				return nil, e
 			}
 			want[name] = true
 		}
 	}
-	if e := r.prune(ctx, &cam, want); e != nil {
-		return ctrl.Result{}, e
+	if e := r.prune(ctx, cam, want); e != nil {
+		return nil, e
 	}
-	return ctrl.Result{}, r.status(ctx, &cam, invalid)
+	return invalid, nil
 }
 
 func (r *ClusterAccessReconciler) ensure(ctx context.Context, cam *api.ClusterAccessMapping, name, role string, subjects []rbacv1.Subject) error {
@@ -109,14 +120,22 @@ func (r *ClusterAccessReconciler) prune(ctx context.Context, cam *api.ClusterAcc
 	return nil
 }
 
-func (r *ClusterAccessReconciler) status(ctx context.Context, cam *api.ClusterAccessMapping, invalid []api.InvalidReference) error {
-	invalidReferences.WithLabelValues("clusteraccessmapping", cam.Name).Set(float64(len(invalid)))
+// status reports the outcome of a sync pass, on the same terms as the
+// ManagedNamespace reconciler's: only a completed pass refreshes
+// observedGeneration, the invalid-reference list, and the gauge.
+func (r *ClusterAccessReconciler) status(ctx context.Context, cam *api.ClusterAccessMapping, invalid []api.InvalidReference, syncErr error) error {
 	base := cam.DeepCopy()
-	cam.Status.ObservedGeneration = cam.Generation
-	cam.Status.InvalidReferences = invalid
 	status, reason, message := metav1.ConditionTrue, "Reconciled", "ClusterRoleBindings are in sync"
-	if len(invalid) > 0 {
+	switch {
+	case syncErr != nil:
+		status, reason, message = metav1.ConditionFalse, "SyncFailed", conditionMessage(syncErr)
+	case len(invalid) > 0:
 		status, reason, message = metav1.ConditionFalse, "InvalidReferences", "One or more ClusterRole references are invalid"
+	}
+	if syncErr == nil {
+		invalidReferences.WithLabelValues("clusteraccessmapping", cam.Name).Set(float64(len(invalid)))
+		cam.Status.ObservedGeneration = cam.Generation
+		cam.Status.InvalidReferences = invalid
 	}
 	meta.SetStatusCondition(&cam.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: cam.Generation})
 	return r.Status().Patch(ctx, cam, client.MergeFrom(base))

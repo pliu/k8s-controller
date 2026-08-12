@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -57,17 +58,23 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		return ctrl.Result{Requeue: true}, r.Patch(ctx, &mns, client.MergeFrom(base))
 	}
 
-	if e := r.ensureNamespace(ctx, &mns); e != nil {
-		return ctrl.Result{}, e
+	invalid, syncErr := r.sync(ctx, &mns)
+	// status runs on both paths so a spec the API server rejects is reported on
+	// the object, not only in the controller log.
+	if e := r.status(ctx, &mns, invalid, syncErr); e != nil {
+		return ctrl.Result{}, errors.Join(syncErr, e)
 	}
-	if e := r.reconcileQuota(ctx, &mns); e != nil {
-		return ctrl.Result{}, e
+	return ctrl.Result{}, terminal(syncErr)
+}
+
+func (r *ManagedNamespaceReconciler) sync(ctx context.Context, mns *api.ManagedNamespace) ([]api.InvalidReference, error) {
+	if e := r.ensureNamespace(ctx, mns); e != nil {
+		return nil, e
 	}
-	invalid, e := r.reconcileBindings(ctx, &mns)
-	if e != nil {
-		return ctrl.Result{}, e
+	if e := r.reconcileQuota(ctx, mns); e != nil {
+		return nil, e
 	}
-	return ctrl.Result{}, r.status(ctx, &mns, invalid)
+	return r.reconcileBindings(ctx, mns)
 }
 
 func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
@@ -241,14 +248,24 @@ func (r *ManagedNamespaceReconciler) pruneBindings(ctx context.Context, mns *api
 	return nil
 }
 
-func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference) error {
-	invalidReferences.WithLabelValues("managednamespace", mns.Name).Set(float64(len(invalid)))
+// status reports the outcome of a sync pass. observedGeneration, the
+// invalid-reference list, and the gauge are refreshed only when the pass
+// completed, so a failure part-way through cannot erase what the last good pass
+// found; the Ready condition always carries the current generation, which is
+// what distinguishes "failing on this spec" from a stale condition.
+func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference, syncErr error) error {
 	base := mns.DeepCopy()
-	mns.Status.ObservedGeneration = mns.Generation
-	mns.Status.InvalidReferences = invalid
 	status, reason, message := metav1.ConditionTrue, "Reconciled", "Namespace, quota, and bindings are in sync"
-	if len(invalid) > 0 {
+	switch {
+	case syncErr != nil:
+		status, reason, message = metav1.ConditionFalse, "SyncFailed", conditionMessage(syncErr)
+	case len(invalid) > 0:
 		status, reason, message = metav1.ConditionFalse, "InvalidReferences", "One or more ClusterRole references are invalid"
+	}
+	if syncErr == nil {
+		invalidReferences.WithLabelValues("managednamespace", mns.Name).Set(float64(len(invalid)))
+		mns.Status.ObservedGeneration = mns.Generation
+		mns.Status.InvalidReferences = invalid
 	}
 	meta.SetStatusCondition(&mns.Status.Conditions, metav1.Condition{Type: "Ready", Status: status, Reason: reason, Message: message, ObservedGeneration: mns.Generation})
 	return r.Status().Patch(ctx, mns, client.MergeFrom(base))
