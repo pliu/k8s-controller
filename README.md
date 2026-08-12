@@ -75,6 +75,16 @@ kubectl apply -k config
 kubectl apply -f config/sample.yaml
 ```
 
+Uninstall in the reverse order: delete every `ManagedNamespace` and
+`ClusterAccessMapping` first and let them finish terminating, then remove the
+operator and the CRDs. The bindings are cleaned up by a finalizer, so tearing
+down the operator first leaves the custom resources stuck terminating with
+nothing to release them; force-removing the finalizers at that point deletes
+the objects while their RoleBindings and ClusterRoleBindings stay behind,
+still granting access. Recreating a resource under the same name reclaims and
+cleans up whatever its predecessor left, which is the way back if this has
+already happened.
+
 The image ships one binary. The reconciler always runs; `-server` additionally
 serves the read-only HTTP API and UI, so that unauthenticated surface is never
 exposed unless it is asked for. The default manifests pass `-server`, with the
@@ -100,7 +110,8 @@ given a username or group, lists the namespaces (and any cluster-wide scope) and
 ClusterRoles they are granted. Both endpoints read from a watch-fed cache, so a
 request costs no API-server traffic and reflects the cluster as of the last
 watch event. It performs no writes and no authentication; restrict access to it
-with a NetworkPolicy or an authenticating proxy as your environment requires. The `group` values must match the stable group identifiers
-your cluster's authenticator asserts to kube-apiserver.
+with a NetworkPolicy or an authenticating proxy as your environment requires.
+The `group` values must match the stable group identifiers your cluster's
+authenticator asserts to kube-apiserver.
 
 The project is licensed under the Apache License, Version 2.0.

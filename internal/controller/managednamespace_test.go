@@ -176,7 +176,6 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 			Namespace: mns.Name,
 			Labels: map[string]string{
 				core.LabelManagedBy: core.ManagedBy,
-				core.LabelOwnerUID:  string(mnsUID),
 				core.LabelOwnerName: mns.Name,
 			},
 		},
@@ -190,7 +189,6 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 			Namespace: mns.Name,
 			Labels: map[string]string{
 				core.LabelManagedBy: core.ManagedBy,
-				core.LabelOwnerUID:  string(mnsUID),
 				core.LabelOwnerName: mns.Name,
 			},
 		},
@@ -214,8 +212,8 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 }
 
 // A ManagedNamespace recreated under the same name gets a new UID. Quotas left
-// by the previous CR still carry the old owner-uid; prune must match on owner
-// name so a successor without spec.resourceQuota can clear them.
+// by the previous CR are still labelled with that name; prune must match on
+// owner name so a successor without spec.resourceQuota can clear them.
 func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -247,7 +245,6 @@ func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
 			Namespace: name,
 			Labels: map[string]string{
 				core.LabelManagedBy: core.ManagedBy,
-				core.LabelOwnerUID:  "old-uid",
 				core.LabelOwnerName: name,
 			},
 		},

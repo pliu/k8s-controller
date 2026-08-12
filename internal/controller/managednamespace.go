@@ -151,7 +151,7 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 	}
 	rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: keep, Namespace: mns.Name}}
 	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, rq, func() error {
-		rq.Labels = r.labels(mns)
+		rq.Labels = ownerLabels(mns.Name)
 		rq.Spec = corev1.ResourceQuotaSpec{Hard: mns.Spec.ResourceQuota.Hard}
 		return nil
 	})
@@ -161,8 +161,8 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 // pruneQuotas deletes managed ResourceQuotas other than keep in the current
 // namespace. keep == "" removes all managed quotas for this name.
 //
-// Matching uses LabelOwnerName (not UID) so a recreated ManagedNamespace can
-// reclaim or clear a quota left behind by a previous CR with the same name.
+// Matching uses LabelOwnerName, which survives the owner being recreated, so a
+// successor can reclaim or clear a quota left by a previous CR of that name.
 func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
 	var list corev1.ResourceQuotaList
 	if e := r.List(ctx, &list, client.MatchingLabels{
@@ -223,7 +223,7 @@ func (r *ManagedNamespaceReconciler) ensureRoleBinding(ctx context.Context, mns 
 		obj = &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
 	}
 	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-		obj.Labels = r.labels(mns)
+		obj.Labels = ownerLabels(mns.Name)
 		obj.RoleRef = want
 		obj.Subjects = subjects
 		return nil
@@ -271,12 +271,14 @@ func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.Manage
 	return r.Status().Patch(ctx, mns, client.MergeFrom(base))
 }
 
-func (r *ManagedNamespaceReconciler) labels(mns *api.ManagedNamespace) map[string]string {
-	return ownerLabels(mns.UID, mns.Name)
-}
-
+// ownedBy selects this ManagedNamespace's generated objects. It matches on
+// LabelOwnerName for the same reason pruneQuotas does, and it matters more
+// here: generated names derive from the owner's name, so a ManagedNamespace
+// recreated under that name adopts the bindings its predecessor left behind.
+// Keyed on anything narrower, every binding the successor no longer wants
+// would stay invisible to the prune, live and unreferenced.
 func (r *ManagedNamespaceReconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {
-	return client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(mns.UID)}
+	return client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: mns.Name}
 }
 
 func (r *ManagedNamespaceReconciler) all(ctx context.Context, _ client.Object) []reconcile.Request {

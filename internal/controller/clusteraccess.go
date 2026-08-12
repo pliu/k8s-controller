@@ -95,7 +95,7 @@ func (r *ClusterAccessReconciler) ensure(ctx context.Context, cam *api.ClusterAc
 		obj = &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	}
 	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, obj, func() error {
-		obj.Labels = ownerLabels(cam.UID, cam.Name)
+		obj.Labels = ownerLabels(cam.Name)
 		obj.RoleRef = want
 		obj.Subjects = subjects
 		return nil
@@ -105,9 +105,15 @@ func (r *ClusterAccessReconciler) ensure(ctx context.Context, cam *api.ClusterAc
 
 // prune deletes owned ClusterRoleBindings not in want. want == nil removes all
 // owned bindings.
+//
+// Matching uses LabelOwnerName so a ClusterAccessMapping recreated under the
+// same name reclaims and clears what its predecessor left behind. Generated
+// names derive from the owner's name, so a successor adopts the bindings it
+// still wants; keyed on anything narrower than the name, the ones it no longer
+// wants would stay invisible here, granting access nothing references.
 func (r *ClusterAccessReconciler) prune(ctx context.Context, cam *api.ClusterAccessMapping, want map[string]bool) error {
 	var list rbacv1.ClusterRoleBindingList
-	if e := r.List(ctx, &list, client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(cam.UID)}); e != nil {
+	if e := r.List(ctx, &list, client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: cam.Name}); e != nil {
 		return e
 	}
 	for i := range list.Items {

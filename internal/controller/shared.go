@@ -42,8 +42,10 @@ func subjectKey(am api.AccessMapping) string {
 
 // ownerLabels stamp a generated object with its owning custom resource so drift
 // can be detected and stale objects cleaned up without adopting anything else.
-func ownerLabels(uid types.UID, name string) map[string]string {
-	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerUID: string(uid), core.LabelOwnerName: name}
+// The owner's name is the whole identity: it is what the prunes select on, and
+// it survives the owner being deleted and recreated, which a UID would not.
+func ownerLabels(name string) map[string]string {
+	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: name}
 }
 
 // terminal marks the errors that retrying cannot fix. An Invalid response means
