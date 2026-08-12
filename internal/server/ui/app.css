@@ -1,27 +1,48 @@
 /* SPDX-License-Identifier: Apache-2.0 */
-body{font:15px system-ui;margin:2rem auto;max-width:1000px;padding:0 1rem;color:#17202a}
+/* color-scheme tells the browser to render form controls, scrollbars and focus
+   rings dark too, which stylesheet colours alone do not reach. */
+:root{
+  color-scheme:dark;
+  --bg:#14181d;--surface:#1b2128;--surface-2:#232b34;
+  --border:#2c353f;--text:#dde4ea;--muted:#8c99a6;
+  --accent:#5aa2f0;--accent-bg:#1a2937;
+  --ok:#4ec98a;--bad:#f2776d;--pending:#e0b341;
+}
+body{font:15px system-ui;margin:2rem auto;max-width:1000px;padding:0 1rem;background:var(--bg);color:var(--text)}
 h1{margin:0 0 1rem}
 h3{margin:.2rem 0}
-h4{margin:1rem 0 .3rem;color:#566}
+h4{margin:1rem 0 .3rem;color:var(--muted)}
 
-.tabs{display:flex;gap:.5rem;align-items:center;border-bottom:2px solid #e1e5e8;margin-bottom:1rem}
-.tabs button{background:none;border:none;padding:.6rem .9rem;font-size:15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:#566}
-.tabs button.active{color:#17202a;border-bottom-color:#2a7ade;font-weight:600}
+.tabs{display:flex;gap:.5rem;align-items:center;border-bottom:2px solid var(--border);margin-bottom:1rem}
+.tabs button{background:none;border:none;padding:.6rem .9rem;font-size:15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--muted)}
+.tabs button:hover{color:var(--text)}
+.tabs button.active{color:var(--text);border-bottom-color:var(--accent);font-weight:600}
 .tabs .spacer{flex:1}
 
 .row{display:grid;grid-template-columns:16rem 1fr;gap:1rem}
 @media(max-width:700px){.row{display:block}}
-section{border:1px solid #ccd1d1;border-radius:8px;padding:1rem;margin:0}
+section{border:1px solid var(--border);border-radius:8px;padding:1rem;margin:0;background:var(--surface)}
 
 #ns-list{display:flex;flex-direction:column;gap:.25rem}
-.ns-item{text-align:left;background:#f4f6f7;border:1px solid #dfe4e6;border-radius:6px;padding:.5rem .7rem;cursor:pointer;font:inherit}
-.ns-item.sel{background:#e7f0fb;border-color:#2a7ade}
+.ns-item{display:flex;justify-content:space-between;align-items:center;gap:.4rem;text-align:left;background:var(--surface-2);border:1px solid var(--border);border-radius:6px;padding:.5rem .7rem;cursor:pointer;font:inherit;color:var(--text)}
+.ns-item:hover{border-color:var(--accent)}
+.ns-item.sel{background:var(--accent-bg);border-color:var(--accent)}
 
-input{box-sizing:border-box;padding:.55rem;font-size:15px;width:20rem;max-width:100%}
-button.act{padding:.55rem .9rem;margin-left:.4rem}
+input{box-sizing:border-box;padding:.55rem;font-size:15px;width:20rem;max-width:100%;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px}
+button.act{padding:.55rem .9rem;margin-left:.4rem;background:var(--surface-2);color:var(--text);border:1px solid var(--border);border-radius:6px;font:inherit;cursor:pointer}
+button.act:hover{border-color:var(--accent)}
 
 table{border-collapse:collapse;width:100%;margin:.3rem 0 1rem}
-th,td{text-align:left;border:1px solid #e1e5e8;padding:.4rem .6rem;vertical-align:top}
-th{background:#f4f6f7}
+th,td{text-align:left;border:1px solid var(--border);padding:.4rem .6rem;vertical-align:top}
+th{background:var(--surface-2)}
 
-.muted{color:#889}
+.muted{color:var(--muted)}
+
+/* Status. A grant naming a ClusterRole that does not exist is not in effect,
+   so it is struck through rather than listed as though it worked. */
+.badge{display:inline-block;border:1px solid;border-radius:999px;padding:.05rem .5rem;font-size:12px;font-weight:600;white-space:nowrap}
+.badge.ok{color:var(--ok);border-color:var(--ok)}
+.badge.bad{color:var(--bad);border-color:var(--bad)}
+.badge.pending{color:var(--pending);border-color:var(--pending)}
+.status-line{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin:.4rem 0 .2rem}
+.role-bad{color:var(--bad);text-decoration:line-through}
