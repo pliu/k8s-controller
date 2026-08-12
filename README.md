@@ -99,6 +99,15 @@ Reconciliation is watch-driven; `-sync-period` (default `1h`) sets how often
 every `ManagedNamespace` is re-synced as a drift-repair safety net. `-listen`
 (default `:8080`) sets the HTTP bind address.
 
+To run it against a cluster from outside — a kind cluster during development,
+say — add `-no-leader-election`. Leader election holds a lease in the
+operator's own namespace, which a process can only discover from inside the
+cluster, and a single local process has nothing to contend with:
+
+```sh
+go run ./cmd/k8s-controller -server -no-leader-election
+```
+
 Prometheus metrics are served at `/metrics` on the listen address either way,
 from one shared registry: controller-runtime's reconcile/workqueue/client
 series, Go and process collectors, the viewer's request count and latency

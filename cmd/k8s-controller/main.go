@@ -23,6 +23,10 @@ func main() {
 	// The reconciler always runs; the viewer is opt-in, so the unauthenticated
 	// HTTP surface is never exposed by accident.
 	runServer := flag.Bool("server", false, "additionally serve the read-only HTTP API and UI on -listen")
+	// Leader election needs a namespace to hold its lease, which the process can
+	// only discover from inside the cluster. A single process run against a
+	// kubeconfig has nothing to contend with anyway, so it turns off there.
+	noLeaderElect := flag.Bool("no-leader-election", false, "skip leader election, which a single process running outside the cluster cannot set up and does not need")
 	syncPeriod := flag.Duration("sync-period", time.Hour, "interval at which the reconciler re-syncs every ManagedNamespace as a drift-repair safety net")
 	listen := flag.String("listen", ":8080", "address the HTTP server (UI, API, and /metrics) binds; without -server the manager serves /metrics here instead")
 	flag.Parse()
@@ -42,7 +46,7 @@ func main() {
 	if serverEnabled {
 		metricsAddr = "0"
 	}
-	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: true, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}, Metrics: metricsserver.Options{BindAddress: metricsAddr}})
+	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: !*noLeaderElect, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}, Metrics: metricsserver.Options{BindAddress: metricsAddr}})
 	if e != nil {
 		panic(e)
 	}
