@@ -49,13 +49,18 @@ spec:
             properties:
               clusterRoles:
                 items:
+                  minLength: 1
                   type: string
                 minItems: 1
                 type: array
               group:
                 type: string
               users:
+                description: |-
+                  Users are each bound as an individual User subject. Order and repetition
+                  do not matter; the set is what is granted.
                 items:
+                  minLength: 1
                   type: string
                 type: array
             required:

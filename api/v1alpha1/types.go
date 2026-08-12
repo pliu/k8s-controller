@@ -23,9 +23,13 @@ var AddToScheme = SchemeBuilder.AddToScheme
 // the spec of a ClusterAccessMapping. Exactly one of group or users is set.
 // +kubebuilder:validation:XValidation:rule="(has(self.group) && size(self.group) > 0) != (has(self.users) && size(self.users) > 0)",message="set exactly one of group or users"
 type AccessMapping struct {
-	Group string   `json:"group,omitempty"`
+	Group string `json:"group,omitempty"`
+	// Users are each bound as an individual User subject. Order and repetition
+	// do not matter; the set is what is granted.
+	// +kubebuilder:validation:items:MinLength=1
 	Users []string `json:"users,omitempty"`
 	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:items:MinLength=1
 	ClusterRoles []string `json:"clusterRoles"`
 }
 
