@@ -88,6 +88,7 @@ func (r *ClusterAccessReconciler) sync(ctx context.Context, cam *api.ClusterAcce
 func (r *ClusterAccessReconciler) ensure(ctx context.Context, cam *api.ClusterAccessMapping, name, role string, subjects []rbacv1.Subject) error {
 	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
 	obj := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	// Replace rather than update, for the reason ensureRoleBinding explains.
 	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
 		if e = r.Delete(ctx, obj); e != nil {
 			return e

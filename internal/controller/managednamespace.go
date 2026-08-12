@@ -216,6 +216,11 @@ func (r *ManagedNamespaceReconciler) reconcileBindings(ctx context.Context, mns 
 func (r *ManagedNamespaceReconciler) ensureRoleBinding(ctx context.Context, mns *api.ManagedNamespace, name, role string, subjects []rbacv1.Subject) error {
 	want := rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role}
 	obj := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
+	// roleRef is immutable, so a binding that points somewhere else has to be
+	// replaced rather than updated. BindingName hashes the role, so changing a
+	// mapping's ClusterRole yields a different object and this cannot be reached
+	// through the spec; it is here for a name that something else already took,
+	// and to keep working if the role ever leaves the hash. Not dead code.
 	if e := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); e == nil && obj.RoleRef != want {
 		if e = r.Delete(ctx, obj); e != nil {
 			return e
