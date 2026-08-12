@@ -45,6 +45,18 @@ kubectl -n k8s-controller wait --for=condition=Ready pod/api-client --timeout=12
 api_url=http://k8s-controller
 kubectl -n k8s-controller exec api-client -- curl -fsS "$api_url/livez" >/dev/null
 
+# Both endpoints are served from a watch-fed cache rather than a live LIST, so
+# assert real data comes back and not just that the route answers.
+for _ in {1..30}; do
+  kubectl -n k8s-controller exec api-client -- \
+    curl -fsS "$api_url/api/v1/managednamespaces" | grep -q team-a && break
+  sleep 1
+done
+kubectl -n k8s-controller exec api-client -- \
+  curl -fsS "$api_url/api/v1/managednamespaces" | grep -q team-a
+kubectl -n k8s-controller exec api-client -- \
+  curl -fsS "$api_url/api/v1/clusteraccessmappings" | grep -q cluster-pod-readers
+
 # Every replica serves HTTP metrics, while only the leader necessarily has a
 # reconcile series. Scrape all replicas so both sides of the shared registry are
 # tested without depending on which pod the Service selects.

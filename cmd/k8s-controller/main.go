@@ -12,7 +12,6 @@ import (
 	s "github.com/pliu/k8s-controller/internal/server"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -21,15 +20,13 @@ import (
 )
 
 func main() {
-	runController := flag.Bool("controller", false, "run the reconciler (default: run both when neither -controller nor -server is given)")
-	runServer := flag.Bool("server", false, "run the HTTP API and UI (default: run both when neither -controller nor -server is given)")
+	// The reconciler always runs; the viewer is opt-in, so the unauthenticated
+	// HTTP surface is never exposed by accident.
+	runServer := flag.Bool("server", false, "additionally serve the read-only HTTP API and UI on -listen")
 	syncPeriod := flag.Duration("sync-period", time.Hour, "interval at which the reconciler re-syncs every ManagedNamespace as a drift-repair safety net")
-	listen := flag.String("listen", ":8080", "address the HTTP server (UI, API, and /metrics) binds; controller-only mode serves /metrics here instead")
+	listen := flag.String("listen", ":8080", "address the HTTP server (UI, API, and /metrics) binds; without -server the manager serves /metrics here instead")
 	flag.Parse()
-	controllerEnabled, serverEnabled := *runController, *runServer
-	if !controllerEnabled && !serverEnabled {
-		controllerEnabled, serverEnabled = true, true
-	}
+	serverEnabled := *runServer
 
 	cfg := ctrl.GetConfigOrDie()
 	scheme := runtime.NewScheme()
@@ -37,19 +34,10 @@ func main() {
 	_ = api.AddToScheme(scheme)
 	ctx := ctrl.SetupSignalHandler()
 
-	// The HTTP server is stateless and needs neither a manager nor leader
-	// election, so run it directly when the reconciler is not also enabled.
-	if serverEnabled && !controllerEnabled {
-		if e := serve(ctx, cfg, scheme, *listen); e != nil {
-			panic(e)
-		}
-		return
-	}
-
-	// Every mode serves the shared metrics registry on the listen address. When
-	// the HTTP server runs it owns that address and serves /metrics itself, so
-	// the manager's own metrics listener is disabled; controller-only mode
-	// keeps the manager's listener on the same address instead.
+	// Either way the shared metrics registry is served on the listen address:
+	// with -server the HTTP server owns that address and serves /metrics itself,
+	// so the manager's own listener is disabled; without it the manager's
+	// listener binds the address instead.
 	metricsAddr := *listen
 	if serverEnabled {
 		metricsAddr = "0"
@@ -66,8 +54,10 @@ func main() {
 	}
 	if serverEnabled {
 		// Register as a non-leader-election runnable so the API is served by
-		// every replica, not only the one holding the reconciler lease.
-		if e = mgr.Add(&serverRunnable{cfg: cfg, scheme: scheme, addr: *listen}); e != nil {
+		// every replica, not only the one holding the reconciler lease. The
+		// manager's client already reads both kinds from the informers the
+		// reconcilers watch, so the viewer adds no API-server traffic here.
+		if e = mgr.Add(&serverRunnable{cl: mgr.GetClient(), addr: *listen}); e != nil {
 			panic(e)
 		}
 	}
@@ -79,21 +69,16 @@ func main() {
 }
 
 type serverRunnable struct {
-	cfg    *rest.Config
-	scheme *runtime.Scheme
-	addr   string
+	cl   client.Client
+	addr string
 }
 
 func (*serverRunnable) NeedLeaderElection() bool { return false }
 func (r *serverRunnable) Start(ctx context.Context) error {
-	return serve(ctx, r.cfg, r.scheme, r.addr)
+	return serve(ctx, r.cl, r.addr)
 }
 
-func serve(ctx context.Context, cfg *rest.Config, scheme *runtime.Scheme, addr string) error {
-	cl, e := client.New(cfg, client.Options{Scheme: scheme})
-	if e != nil {
-		return e
-	}
+func serve(ctx context.Context, cl client.Client, addr string) error {
 	app := &s.Server{Client: cl}
 	httpServer := &http.Server{Addr: addr, Handler: app.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	go func() {

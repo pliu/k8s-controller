@@ -75,21 +75,21 @@ kubectl apply -k config
 kubectl apply -f config/sample.yaml
 ```
 
-The image ships one binary. It runs both the reconciler and the HTTP API by
-default; pass `-controller` or `-server` to run only one. The default manifests
-deploy the combined mode, with the reconciler under leader election and the API
-served by every replica. Reconciliation is watch-driven; `-sync-period` (default
-`1h`) sets how often every `ManagedNamespace` is re-synced as a drift-repair
-safety net. `-listen` (default `:8080`) sets the HTTP bind address.
+The image ships one binary. The reconciler always runs; `-server` additionally
+serves the read-only HTTP API and UI, so that unauthenticated surface is never
+exposed unless it is asked for. The default manifests pass `-server`, with the
+reconciler under leader election and the API served by every replica.
+Reconciliation is watch-driven; `-sync-period` (default `1h`) sets how often
+every `ManagedNamespace` is re-synced as a drift-repair safety net. `-listen`
+(default `:8080`) sets the HTTP bind address.
 
-Prometheus metrics are served at `/metrics` on the listen address in every mode,
+Prometheus metrics are served at `/metrics` on the listen address either way,
 from one shared registry: controller-runtime's reconcile/workqueue/client
 series, Go and process collectors, the viewer's request count and latency
 (`k8s_controller_http_*`), and `k8s_controller_invalid_references` reporting
-each resource's currently-invalid ClusterRole references. In combined and
-server-only modes the HTTP server serves it; in controller-only mode the
-manager's own metrics listener binds the same address, so the scrape target is
-identical everywhere.
+each resource's currently-invalid ClusterRole references. With `-server` the
+HTTP server serves it; without, the manager's own metrics listener binds the
+same address, so the scrape target is identical either way.
 
 The server exposes `GET /api/v1/managednamespaces` and
 `GET /api/v1/clusteraccessmappings` plus an embedded UI (`internal/server/ui`)
@@ -97,9 +97,10 @@ with three views: a **Namespaces** list where selecting a namespace shows its
 ResourceQuota and permission mappings (users/groups → ClusterRoles), a **Cluster
 access** view listing the cluster-wide mappings, and a **Search** view that,
 given a username or group, lists the namespaces (and any cluster-wide scope) and
-ClusterRoles they are granted. It performs no writes and no authentication;
-restrict access to it with a NetworkPolicy or an authenticating proxy as your
-environment requires. The `group` values must match the stable group identifiers
+ClusterRoles they are granted. Both endpoints read from a watch-fed cache, so a
+request costs no API-server traffic and reflects the cluster as of the last
+watch event. It performs no writes and no authentication; restrict access to it
+with a NetworkPolicy or an authenticating proxy as your environment requires. The `group` values must match the stable group identifiers
 your cluster's authenticator asserts to kube-apiserver.
 
 The project is licensed under the Apache License, Version 2.0.
