@@ -31,7 +31,10 @@ import (
 // are left in place so existing workloads keep their resource limits.
 // Referenced ClusterRoles are not managed here; a missing one fails closed and
 // is reported in status.
-type ManagedNamespaceReconciler struct{ client.Client }
+type ManagedNamespaceReconciler struct {
+	client.Client
+	APIReader client.Reader
+}
 
 func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
 	var mns api.ManagedNamespace
@@ -39,8 +42,12 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		return ctrl.Result{}, client.IgnoreNotFound(e)
 	}
 	if !mns.DeletionTimestamp.IsZero() {
-		if e := r.pruneBindings(ctx, &mns, nil); e != nil {
+		gone, e := r.finalizeBindings(ctx, &mns)
+		if e != nil {
 			return ctrl.Result{}, e
+		}
+		if !gone {
+			return ctrl.Result{RequeueAfter: finalizerRetryAfter}, nil
 		}
 		// The namespace and its ResourceQuota are intentionally left in place.
 		invalidReferences.DeleteLabelValues("managednamespace", mns.Name)
@@ -65,6 +72,30 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		return ctrl.Result{}, errors.Join(syncErr, e)
 	}
 	return ctrl.Result{}, terminal(syncErr)
+}
+
+// finalizeBindings deletes bindings found through a live API read and returns
+// true only after a later live read proves that none remain. The manager's
+// ordinary client reads through informer caches, which can lag a recent binding
+// create; removing the owner finalizer based on such a list can orphan the
+// grant permanently.
+func (r *ManagedNamespaceReconciler) finalizeBindings(ctx context.Context, mns *api.ManagedNamespace) (bool, error) {
+	var list rbacv1.RoleBindingList
+	if e := cleanupReader(r.Client, r.APIReader).List(ctx, &list, r.ownedBy(mns)); e != nil {
+		return false, e
+	}
+	if len(list.Items) == 0 {
+		return true, nil
+	}
+	for i := range list.Items {
+		if !list.Items[i].DeletionTimestamp.IsZero() {
+			continue
+		}
+		if e := client.IgnoreNotFound(r.Delete(ctx, &list.Items[i])); e != nil {
+			return false, e
+		}
+	}
+	return false, nil
 }
 
 func (r *ManagedNamespaceReconciler) sync(ctx context.Context, mns *api.ManagedNamespace) ([]api.InvalidReference, error) {

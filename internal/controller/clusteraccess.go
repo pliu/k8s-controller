@@ -22,7 +22,10 @@ import (
 // ClusterAccessMapping: a single group or user list bound cluster-wide to a set
 // of ClusterRoles. Referenced ClusterRoles are not managed here; a missing one
 // fails closed and is reported in status.
-type ClusterAccessReconciler struct{ client.Client }
+type ClusterAccessReconciler struct {
+	client.Client
+	APIReader client.Reader
+}
 
 func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request) (ctrl.Result, error) {
 	var cam api.ClusterAccessMapping
@@ -30,8 +33,12 @@ func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request)
 		return ctrl.Result{}, client.IgnoreNotFound(e)
 	}
 	if !cam.DeletionTimestamp.IsZero() {
-		if e := r.prune(ctx, &cam, nil); e != nil {
+		gone, e := r.finalizeBindings(ctx, &cam)
+		if e != nil {
 			return ctrl.Result{}, e
+		}
+		if !gone {
+			return ctrl.Result{RequeueAfter: finalizerRetryAfter}, nil
 		}
 		invalidReferences.DeleteLabelValues("clusteraccessmapping", cam.Name)
 		base := cam.DeepCopy()
@@ -55,6 +62,31 @@ func (r *ClusterAccessReconciler) Reconcile(ctx context.Context, q ctrl.Request)
 		return ctrl.Result{}, errors.Join(syncErr, e)
 	}
 	return ctrl.Result{}, terminal(syncErr)
+}
+
+// finalizeBindings is the cluster-scoped counterpart to the managed-namespace
+// finalizer: use a live read, request deletion, then wait for a later live read
+// to confirm that every grant is actually gone.
+func (r *ClusterAccessReconciler) finalizeBindings(ctx context.Context, cam *api.ClusterAccessMapping) (bool, error) {
+	var list rbacv1.ClusterRoleBindingList
+	if e := cleanupReader(r.Client, r.APIReader).List(ctx, &list, client.MatchingLabels{
+		core.LabelManagedBy: core.ManagedBy,
+		core.LabelOwnerName: cam.Name,
+	}); e != nil {
+		return false, e
+	}
+	if len(list.Items) == 0 {
+		return true, nil
+	}
+	for i := range list.Items {
+		if !list.Items[i].DeletionTimestamp.IsZero() {
+			continue
+		}
+		if e := client.IgnoreNotFound(r.Delete(ctx, &list.Items[i])); e != nil {
+			return false, e
+		}
+	}
+	return false, nil
 }
 
 func (r *ClusterAccessReconciler) sync(ctx context.Context, cam *api.ClusterAccessMapping) ([]api.InvalidReference, error) {

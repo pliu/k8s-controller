@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	api "github.com/pliu/k8s-controller/api/v1alpha1"
 	"github.com/pliu/k8s-controller/internal/core"
@@ -15,6 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
+
+const finalizerRetryAfter = time.Second
 
 // Helpers shared by the ManagedNamespace and ClusterAccessMapping reconcilers,
 // which both turn an AccessMapping's subject set into owned bindings.
@@ -58,6 +61,17 @@ func subjectKey(am api.AccessMapping) string {
 // it survives the owner being deleted and recreated, which a UID would not.
 func ownerLabels(name string) map[string]string {
 	return map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: name}
+}
+
+// cleanupReader returns the uncached reader used to prove that binding cleanup
+// has completed. Tests and embedders that do not provide one retain the old
+// client-only behavior, while the production manager always supplies its
+// APIReader.
+func cleanupReader(c client.Client, direct client.Reader) client.Reader {
+	if direct != nil {
+		return direct
+	}
+	return c
 }
 
 // terminal marks the errors that retrying cannot fix. An Invalid response means

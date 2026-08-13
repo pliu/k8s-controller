@@ -9,11 +9,14 @@ import (
 	"github.com/pliu/k8s-controller/internal/core"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 // Bindings outlive their owner whenever the finalizer does not get to run --
@@ -167,5 +170,143 @@ func TestDeletionClearsBindingsFromAPreviousInstance(t *testing.T) {
 	}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(stale), &rbacv1.RoleBinding{}); err == nil {
 		t.Error("a previous instance's binding outlived deletion of the ManagedNamespace")
+	}
+}
+
+// Manager clients read through informer caches. A binding created just before
+// its owner is deleted may not be in that cache yet, so finalization must use
+// the live API reader and must not release the owner until deletion completes.
+func TestManagedNamespaceFinalizerUsesLiveReaderAndWaitsForDeletion(t *testing.T) {
+	name := "team-a"
+	now := metav1.Now()
+	mns := &api.ManagedNamespace{ObjectMeta: metav1.ObjectMeta{
+		Name:              name,
+		Finalizers:        []string{core.Finalizer},
+		DeletionTimestamp: &now,
+	}}
+	binding := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name:       core.BindingName(name, "g:devs", "cluster-admin"),
+		Namespace:  name,
+		Finalizers: []string{"test.k8s.pliu.dev/hold"},
+		Labels: map[string]string{
+			core.LabelManagedBy: core.ManagedBy,
+			core.LabelOwnerName: name,
+		},
+	}}
+
+	live := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(mns, binding).Build()
+	cached := interceptor.NewClient(live, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if bindings, ok := list.(*rbacv1.RoleBindingList); ok {
+				bindings.Items = nil // simulate an informer that has not seen the create
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	r := &ManagedNamespaceReconciler{Client: cached, APIReader: live}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatal("cleanup did not requeue while the binding deletion was pending")
+	}
+	var gotMNS api.ManagedNamespace
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(mns), &gotMNS); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(&gotMNS, core.Finalizer) {
+		t.Fatal("owner finalizer was released before the binding disappeared")
+	}
+	var gotBinding rbacv1.RoleBinding
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(binding), &gotBinding); err != nil {
+		t.Fatal(err)
+	}
+	if gotBinding.DeletionTimestamp.IsZero() {
+		t.Fatal("live API binding was missed even though the cached client hid it")
+	}
+
+	result, err = r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatal("cleanup did not keep requeuing while the binding remained terminating")
+	}
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(mns), &gotMNS); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(&gotMNS, core.Finalizer) {
+		t.Fatal("owner finalizer was released while a binding finalizer kept the grant alive")
+	}
+
+	base := gotBinding.DeepCopy()
+	gotBinding.Finalizers = nil
+	if err := live.Patch(context.Background(), &gotBinding, client.MergeFrom(base)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(mns), &api.ManagedNamespace{}); err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("owner still exists after live API confirmed cleanup: %v", err)
+	}
+}
+
+func TestClusterAccessFinalizerUsesLiveReader(t *testing.T) {
+	name := "devs"
+	now := metav1.Now()
+	cam := &api.ClusterAccessMapping{ObjectMeta: metav1.ObjectMeta{
+		Name:              name,
+		Finalizers:        []string{core.Finalizer},
+		DeletionTimestamp: &now,
+	}}
+	binding := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{
+		Name: core.BindingName(name, "g:devs", "cluster-admin"),
+		Labels: map[string]string{
+			core.LabelManagedBy: core.ManagedBy,
+			core.LabelOwnerName: name,
+		},
+	}}
+
+	live := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(cam, binding).Build()
+	cached := interceptor.NewClient(live, interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if bindings, ok := list.(*rbacv1.ClusterRoleBindingList); ok {
+				bindings.Items = nil
+				return nil
+			}
+			return c.List(ctx, list, opts...)
+		},
+	})
+	r := &ClusterAccessReconciler{Client: cached, APIReader: live}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(cam)}
+
+	result, err := r.Reconcile(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Fatal("cleanup did not wait for a confirming live API read")
+	}
+	var got api.ClusterAccessMapping
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(cam), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !controllerutil.ContainsFinalizer(&got, core.Finalizer) {
+		t.Fatal("owner finalizer was released in the deletion-request pass")
+	}
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(binding), &rbacv1.ClusterRoleBinding{}); err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("binding visible only to the live reader was not deleted: %v", err)
+	}
+
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Get(context.Background(), client.ObjectKeyFromObject(cam), &api.ClusterAccessMapping{}); err == nil || !apierrors.IsNotFound(err) {
+		t.Fatalf("owner still exists after cleanup was confirmed: %v", err)
 	}
 }
