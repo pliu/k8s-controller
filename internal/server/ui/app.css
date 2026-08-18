@@ -12,6 +12,7 @@ body{font:15px system-ui;margin:2rem auto;max-width:1000px;padding:0 1rem;backgr
 h1{margin:0 0 1rem}
 h3{margin:.2rem 0}
 h4{margin:1rem 0 .3rem;color:var(--muted)}
+h5{margin:.8rem 0 .2rem;font-size:14px}
 
 .tabs{display:flex;gap:.5rem;align-items:center;border-bottom:2px solid var(--border);margin-bottom:1rem}
 .tabs button{background:none;border:none;padding:.6rem .9rem;font-size:15px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;color:var(--muted)}

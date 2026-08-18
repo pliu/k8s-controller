@@ -172,7 +172,7 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
 	quota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      core.QuotaName(mns.Name),
+			Name:      "compute",
 			Namespace: mns.Name,
 			Labels: map[string]string{
 				core.LabelManagedBy: core.ManagedBy,
@@ -213,7 +213,7 @@ func TestManagedNamespaceDeletionRetainsNamespaceAndQuota(t *testing.T) {
 
 // A ManagedNamespace recreated under the same name gets a new UID. Quotas left
 // by the previous CR are still labelled with that name; prune must match on
-// owner name so a successor without spec.resourceQuota can clear them.
+// owner name so a successor without spec.resourceQuotas can clear them.
 func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -241,7 +241,7 @@ func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
 	}}
 	staleQuota := &corev1.ResourceQuota{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      core.QuotaName(name),
+			Name:      "compute",
 			Namespace: name,
 			Labels: map[string]string{
 				core.LabelManagedBy: core.ManagedBy,
@@ -261,5 +261,107 @@ func TestManagedNamespaceRecreateWithoutQuotaClearsStaleQuota(t *testing.T) {
 	}
 	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(staleQuota), &corev1.ResourceQuota{}); err == nil {
 		t.Fatal("stale resource quota should have been deleted")
+	}
+}
+
+func TestManagedNamespaceReconcilesMultipleQuotas(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := api.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	name := "team-a"
+	scoped := &corev1.ScopeSelector{MatchExpressions: []corev1.ScopedResourceSelectorRequirement{{
+		ScopeName: corev1.ResourceQuotaScopePriorityClass,
+		Operator:  corev1.ScopeSelectorOpIn,
+		Values:    []string{"low"},
+	}}}
+	mns := &api.ManagedNamespace{ObjectMeta: metav1.ObjectMeta{
+		Name:       name,
+		UID:        types.UID("mns-uid"),
+		Finalizers: []string{core.Finalizer},
+		Labels:     map[string]string{core.LabelManagedBy: core.ManagedBy},
+	}, Spec: api.ManagedNamespaceSpec{
+		ResourceQuotas: []api.ResourceQuota{
+			{
+				Name: "compute",
+				ResourceQuotaSpec: corev1.ResourceQuotaSpec{
+					Hard:   corev1.ResourceList{corev1.ResourcePods: resource.MustParse("50")},
+					Scopes: []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort},
+				},
+			},
+			{
+				Name: "low-priority",
+				ResourceQuotaSpec: corev1.ResourceQuotaSpec{
+					Hard:          corev1.ResourceList{corev1.ResourcePods: resource.MustParse("10")},
+					ScopeSelector: scoped,
+				},
+			},
+		},
+	}}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name: name,
+		Labels: map[string]string{
+			core.LabelManagedBy: core.ManagedBy,
+			core.LabelOwnerName: name,
+		},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mns, ns).
+		WithStatusSubresource(mns).Build()
+	r := &ManagedNamespaceReconciler{Client: cl}
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}); err != nil {
+		t.Fatal(err)
+	}
+
+	var compute, low corev1.ResourceQuota
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: name, Name: "compute"}, &compute); err != nil {
+		t.Fatalf("compute quota: %v", err)
+	}
+	if pods, ok := compute.Spec.Hard[corev1.ResourcePods]; !ok || pods.Cmp(resource.MustParse("50")) != 0 {
+		t.Errorf("compute hard = %#v", compute.Spec.Hard)
+	}
+	if !reflect.DeepEqual(compute.Spec.Scopes, []corev1.ResourceQuotaScope{corev1.ResourceQuotaScopeNotBestEffort}) {
+		t.Errorf("compute scopes = %#v", compute.Spec.Scopes)
+	}
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: name, Name: "low-priority"}, &low); err != nil {
+		t.Fatalf("low-priority quota: %v", err)
+	}
+	if !reflect.DeepEqual(low.Spec.ScopeSelector, scoped) {
+		t.Errorf("low-priority scopeSelector = %#v", low.Spec.ScopeSelector)
+	}
+
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(mns), mns); err != nil {
+		t.Fatal(err)
+	}
+	mns.Spec.ResourceQuotas = []api.ResourceQuota{{
+		Name: "compute",
+		ResourceQuotaSpec: corev1.ResourceQuotaSpec{
+			Hard: corev1.ResourceList{corev1.ResourcePods: resource.MustParse("25")},
+		},
+	}}
+	if err := cl.Update(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(&low), &corev1.ResourceQuota{}); err == nil {
+		t.Fatal("removed quota should have been deleted")
+	}
+	if err := cl.Get(ctx, client.ObjectKey{Namespace: name, Name: "compute"}, &compute); err != nil {
+		t.Fatal(err)
+	}
+	if pods := compute.Spec.Hard[corev1.ResourcePods]; pods.Cmp(resource.MustParse("25")) != 0 {
+		t.Errorf("updated compute hard = %#v", compute.Spec.Hard)
+	}
+	if len(compute.Spec.Scopes) != 0 {
+		t.Errorf("cleared scopes still set: %#v", compute.Spec.Scopes)
 	}
 }

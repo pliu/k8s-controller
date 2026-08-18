@@ -11,11 +11,20 @@ spec:
     owner: platform-team
   annotations:
     example.com/contact: platform@example.com
-  resourceQuota:
-    hard:
-      pods: "50"
-      requests.cpu: "10"
-      requests.memory: 20Gi
+  resourceQuotas:
+    - name: compute
+      hard:
+        pods: "50"
+        requests.cpu: "10"
+        requests.memory: 20Gi
+    - name: low-priority
+      hard:
+        pods: "10"
+      scopeSelector:
+        matchExpressions:
+          - scopeName: PriorityClass
+            operator: In
+            values: [low]
   accessMappings:
     - group: 6f9619ff-8b86-d011-b42d-00c04fc964ff
       clusterRoles: [pod-reader]

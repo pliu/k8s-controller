@@ -17,7 +17,7 @@ kubectl apply -k config
 kubectl -n k8s-controller rollout status deployment/k8s-controller --timeout=120s
 kubectl apply -f config/sample.yaml
 
-# The operator creates the namespace, its ResourceQuota, and the RoleBindings for
+# The operator creates the namespace, its ResourceQuotas, and the RoleBindings for
 # each AccessMapping (group or user subjects bound directly). Nothing is created
 # up front; the ManagedNamespace drives it all.
 for _ in {1..30}; do
