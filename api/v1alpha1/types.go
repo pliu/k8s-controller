@@ -61,7 +61,6 @@ type ManagedNamespaceSpec struct {
 	// that managed quota. Names must be unique.
 	// +listType=map
 	// +listMapKey=name
-	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.name == x.name))",message="resourceQuota names must be unique"
 	ResourceQuotas []ResourceQuota `json:"resourceQuotas,omitempty"`
 	AccessMappings []AccessMapping `json:"accessMappings,omitempty"`
 }

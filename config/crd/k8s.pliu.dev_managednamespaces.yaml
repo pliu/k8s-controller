@@ -176,9 +176,6 @@ spec:
                 x-kubernetes-list-map-keys:
                 - name
                 x-kubernetes-list-type: map
-                x-kubernetes-validations:
-                - message: resourceQuota names must be unique
-                  rule: self.all(x, self.exists_one(y, y.name == x.name))
             type: object
           status:
             properties:
