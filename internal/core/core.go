@@ -20,9 +20,3 @@ func Hash(v string) string { h := sha256.Sum256([]byte(v)); return hex.EncodeToS
 func BindingName(owner, subject, role string) string {
 	return "k8sc-" + Hash(owner + "\x00" + subject + "\x00" + role)[:20]
 }
-
-// QuotaName is the deterministic name of the ResourceQuota a ManagedNamespace
-// manages in its namespace.
-func QuotaName(owner string) string {
-	return "k8sc-quota-" + Hash(owner)[:16]
-}

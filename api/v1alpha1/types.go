@@ -33,9 +33,16 @@ type AccessMapping struct {
 	ClusterRoles []string `json:"clusterRoles"`
 }
 
-// ResourceQuota is the desired quota applied to the managed namespace.
+// ResourceQuota is one ResourceQuota applied to the managed namespace. Name is
+// the object created there; the remaining fields are a Kubernetes
+// ResourceQuotaSpec (hard, scopes, and scopeSelector).
 type ResourceQuota struct {
-	Hard corev1.ResourceList `json:"hard,omitempty"`
+	// Name is the name of the ResourceQuota created in the namespace.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern="^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+	Name                     string `json:"name"`
+	corev1.ResourceQuotaSpec `json:",inline"`
 }
 
 // ManagedNamespaceSpec configures the namespace named by metadata.name. The
@@ -50,9 +57,12 @@ type ManagedNamespaceSpec struct {
 	// Annotations managed by other actors are preserved; controller-owned
 	// annotations take precedence on conflicts.
 	Annotations map[string]string `json:"annotations,omitempty"`
-	// ResourceQuota, when set, is applied to the namespace; clearing it removes
-	// the managed quota.
-	ResourceQuota  *ResourceQuota  `json:"resourceQuota,omitempty"`
+	// ResourceQuotas are applied to the namespace; removing an entry removes
+	// that managed quota. Names must be unique.
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:XValidation:rule="self.all(x, self.exists_one(y, y.name == x.name))",message="resourceQuota names must be unique"
+	ResourceQuotas []ResourceQuota `json:"resourceQuotas,omitempty"`
 	AccessMappings []AccessMapping `json:"accessMappings,omitempty"`
 }
 

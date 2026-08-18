@@ -24,10 +24,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// ManagedNamespaceReconciler keeps the Namespace, ResourceQuota, and
+// ManagedNamespaceReconciler keeps the Namespace, ResourceQuotas, and
 // RoleBindings implied by each ManagedNamespace in sync. It creates the
 // namespace if missing but never deletes it: on ManagedNamespace deletion the
-// RoleBindings it owns are removed, while the Namespace and any ResourceQuota
+// RoleBindings it owns are removed, while the Namespace and any ResourceQuotas
 // are left in place so existing workloads keep their resource limits.
 // Referenced ClusterRoles are not managed here; a missing one fails closed and
 // is reported in status.
@@ -49,7 +49,7 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 		if !gone {
 			return ctrl.Result{RequeueAfter: finalizerRetryAfter}, nil
 		}
-		// The namespace and its ResourceQuota are intentionally left in place.
+		// The namespace and its ResourceQuotas are intentionally left in place.
 		invalidReferences.DeleteLabelValues("managednamespace", mns.Name)
 		base := mns.DeepCopy()
 		controllerutil.RemoveFinalizer(&mns, core.Finalizer)
@@ -170,31 +170,31 @@ func namespaceMetadataInventory(ns *corev1.Namespace) (namespaceMetadata, error)
 }
 
 func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *api.ManagedNamespace) error {
-	keep := ""
-	if mns.Spec.ResourceQuota != nil {
-		keep = core.QuotaName(mns.Name)
+	want := map[string]bool{}
+	for i := range mns.Spec.ResourceQuotas {
+		q := &mns.Spec.ResourceQuotas[i]
+		if q.Name == "" {
+			continue
+		}
+		want[q.Name] = true
+		rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: q.Name, Namespace: mns.Name}}
+		if _, e := controllerutil.CreateOrUpdate(ctx, r.Client, rq, func() error {
+			rq.Labels = ownerLabels(mns.Name)
+			q.ResourceQuotaSpec.DeepCopyInto(&rq.Spec)
+			return nil
+		}); e != nil {
+			return e
+		}
 	}
-	if e := r.pruneQuotas(ctx, mns, keep); e != nil {
-		return e
-	}
-	if keep == "" {
-		return nil
-	}
-	rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: keep, Namespace: mns.Name}}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.Client, rq, func() error {
-		rq.Labels = ownerLabels(mns.Name)
-		rq.Spec = corev1.ResourceQuotaSpec{Hard: mns.Spec.ResourceQuota.Hard}
-		return nil
-	})
-	return e
+	return r.pruneQuotas(ctx, mns, want)
 }
 
-// pruneQuotas deletes managed ResourceQuotas other than keep in the current
-// namespace. keep == "" removes all managed quotas for this name.
+// pruneQuotas deletes managed ResourceQuotas whose names are not in want.
+// want == nil (or empty) removes all managed quotas for this name.
 //
 // Matching uses LabelOwnerName, which survives the owner being recreated, so a
-// successor can reclaim or clear a quota left by a previous CR of that name.
-func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, keep string) error {
+// successor can reclaim or clear quotas left by a previous CR of that name.
+func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, want map[string]bool) error {
 	var list corev1.ResourceQuotaList
 	if e := r.List(ctx, &list, client.MatchingLabels{
 		core.LabelManagedBy: core.ManagedBy,
@@ -204,7 +204,7 @@ func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.M
 	}
 	for i := range list.Items {
 		it := &list.Items[i]
-		if keep == "" || it.Name != keep || it.Namespace != mns.Name {
+		if it.Namespace != mns.Name || !want[it.Name] {
 			if e := client.IgnoreNotFound(r.Delete(ctx, it)); e != nil {
 				return e
 			}
@@ -291,7 +291,7 @@ func (r *ManagedNamespaceReconciler) pruneBindings(ctx context.Context, mns *api
 // what distinguishes "failing on this spec" from a stale condition.
 func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.ManagedNamespace, invalid []api.InvalidReference, syncErr error) error {
 	base := mns.DeepCopy()
-	status, reason, message := metav1.ConditionTrue, "Reconciled", "Namespace, quota, and bindings are in sync"
+	status, reason, message := metav1.ConditionTrue, "Reconciled", "Namespace, quotas, and bindings are in sync"
 	switch {
 	case syncErr != nil:
 		status, reason, message = metav1.ConditionFalse, "SyncFailed", conditionMessage(syncErr)

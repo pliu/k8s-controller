@@ -4,8 +4,8 @@ k8s-controller reconciles a namespace and everything it grants from a single
 `ManagedNamespace` custom resource.
 
 A `ManagedNamespace`'s own name is the namespace it manages (so there is exactly
-one per namespace). It carries optional Namespace `labels` and `annotations`, an
-optional `ResourceQuota`, and a list of `accessMappings`; each mapping binds a
+one per namespace). It carries optional Namespace `labels` and `annotations`,
+zero or more ResourceQuotas, and a list of `accessMappings`; each mapping binds a
 single **group** or a list of **users** to a set of ClusterRoles. The operator
 keeps three things in sync:
 
@@ -14,16 +14,18 @@ keeps three things in sync:
   leave the spec; metadata never requested by the `ManagedNamespace` is
   preserved. It is never deleted by the operator; deleting a
   `ManagedNamespace` removes only the RoleBindings it owns, leaving the
-  namespace, its ResourceQuota, and workloads in place. Deleting the Namespace
+  namespace, its ResourceQuotas, and workloads in place. Deleting the Namespace
   itself is not undone in any useful sense: the operator recreates it with the
-  requested metadata, quota, and bindings, because that is all the
+  requested metadata, quotas, and bindings, because that is all the
   `ManagedNamespace` describes, while every workload, Secret, and
   PersistentVolumeClaim it held is gone for good. Take the namespace
   reappearing as the operator doing its job, not as the deletion being
   repaired.
-- **one ResourceQuota** in that namespace, from `spec.resourceQuota` (cleared if
-  the field is removed while the `ManagedNamespace` still exists; retained when
-  the `ManagedNamespace` itself is deleted).
+- **ResourceQuotas** in that namespace, from `spec.resourceQuotas`. Each entry
+  is a named Kubernetes ResourceQuota spec (`hard`, `scopes`, `scopeSelector`).
+  Removing an entry deletes that managed quota while the `ManagedNamespace`
+  still exists; all managed quotas are retained when the `ManagedNamespace`
+  itself is deleted.
 - **RoleBindings** in that namespace — one per `(accessMapping, clusterRole)`,
   with the group or users as `User`/`Group` subjects bound directly, so
   Kubernetes evaluates them against the authenticated identity on every request.
@@ -68,11 +70,11 @@ namespace you did not mean to touch. A label the operator has adopted and then
 loses from `spec.labels` is deleted from the namespace, not reverted to its
 previous value — dropping a `pod-security.kubernetes.io/enforce` key from a spec
 that once carried it leaves the namespace with no enforcement at all, which is
-more permissive than where it started. And a `spec.resourceQuota` on a system
-namespace makes the API server reject pods that omit resource requests, which
-can keep cluster components from scheduling; since the quota is retained when
-the `ManagedNamespace` is deleted, backing that out means deleting the
-ResourceQuota by hand.
+more permissive than where it started. And a `spec.resourceQuotas` entry on a
+system namespace makes the API server reject pods that omit resource requests,
+which can keep cluster components from scheduling; since those quotas are
+retained when the `ManagedNamespace` is deleted, backing that out means
+deleting the ResourceQuotas by hand.
 
 ```sh
 make verify
@@ -119,7 +121,7 @@ same address, so the scrape target is identical either way.
 The server exposes `GET /api/v1/managednamespaces` and
 `GET /api/v1/clusteraccessmappings` plus an embedded UI (`internal/server/ui`)
 with three views: a **Namespaces** list where selecting a namespace shows its
-ResourceQuota and permission mappings (users/groups → ClusterRoles), a **Cluster
+ResourceQuotas and permission mappings (users/groups → ClusterRoles), a **Cluster
 access** view listing the cluster-wide mappings, and a **Search** view that,
 given a username or group, lists the namespaces (and any cluster-wide scope) and
 ClusterRoles they are granted. Both endpoints read from a watch-fed cache, so a

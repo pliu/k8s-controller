@@ -157,6 +157,31 @@ function renderList() {
   });
 }
 
+function quotaScopeLines(q) {
+  var lines = (q.scopes || []).slice();
+  ((q.scopeSelector && q.scopeSelector.matchExpressions) || []).forEach(function (e) {
+    var s = e.scopeName + ' ' + e.operator;
+    if (e.values && e.values.length) s += ' [' + e.values.join(', ') + ']';
+    lines.push(s);
+  });
+  return lines;
+}
+
+function renderQuota(q) {
+  var wrap = document.createElement('div');
+  wrap.appendChild(el('h5', q.name || '(unnamed)'));
+  var scopes = quotaScopeLines(q);
+  if (scopes.length) wrap.appendChild(el('p', 'Scopes: ' + scopes.join(', '), 'muted'));
+  var hard = q.hard;
+  if (hard && Object.keys(hard).length) {
+    wrap.appendChild(table(['Resource', 'Hard limit'],
+      Object.keys(hard).sort().map(function (k) { return [k, String(hard[k])]; })));
+  } else {
+    wrap.appendChild(el('p', 'No hard limits', 'muted'));
+  }
+  return wrap;
+}
+
 function renderDetail(name) {
   var n = namespaces.find(function (x) { return nsName(x) === name; });
   var d = $('ns-detail');
@@ -165,13 +190,12 @@ function renderDetail(name) {
   d.appendChild(el('h3', name));
   d.appendChild(statusBlock(n));
 
-  d.appendChild(el('h4', 'ResourceQuota'));
-  var hard = n.spec && n.spec.resourceQuota && n.spec.resourceQuota.hard;
-  if (hard && Object.keys(hard).length) {
-    d.appendChild(table(['Resource', 'Hard limit'],
-      Object.keys(hard).sort().map(function (k) { return [k, String(hard[k])]; })));
-  } else {
+  d.appendChild(el('h4', 'ResourceQuotas'));
+  var quotas = (n.spec && n.spec.resourceQuotas) || [];
+  if (!quotas.length) {
     d.appendChild(el('p', 'None', 'muted'));
+  } else {
+    quotas.forEach(function (q) { d.appendChild(renderQuota(q)); });
   }
 
   d.appendChild(el('h4', 'Permissions'));

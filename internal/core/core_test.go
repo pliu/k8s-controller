@@ -15,9 +15,3 @@ func TestBindingNameDistinct(t *testing.T) {
 		}
 	}
 }
-
-func TestQuotaNameDistinct(t *testing.T) {
-	if QuotaName("team-a") == QuotaName("team-b") {
-		t.Fatal("distinct owners collided")
-	}
-}
