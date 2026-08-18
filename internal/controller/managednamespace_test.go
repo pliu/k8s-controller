@@ -365,3 +365,66 @@ func TestManagedNamespaceReconcilesMultipleQuotas(t *testing.T) {
 		t.Errorf("cleared scopes still set: %#v", compute.Spec.Scopes)
 	}
 }
+
+// The owner labels are ordinary labels that any writer of a RoleBinding or
+// ResourceQuota can set, so the prunes have to be scoped to the managed
+// namespace. Listing cluster-wide, they found objects their want sets could
+// never match and deleted them: a label the victim's own author chose was
+// enough to spend the controller's cluster-wide delete permission on it.
+func TestManagedNamespacePrunesOnlyItsOwnNamespace(t *testing.T) {
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, rbacv1.AddToScheme, api.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatal(err)
+		}
+	}
+	name := "team-a"
+	mns := &api.ManagedNamespace{ObjectMeta: metav1.ObjectMeta{
+		Name:       name,
+		Finalizers: []string{core.Finalizer},
+		Labels:     map[string]string{core.LabelManagedBy: core.ManagedBy},
+	}}
+	// Nothing ties these to team-a but the labels, and they sit in a namespace
+	// it does not manage. An empty spec is the worst case: the owner wants no
+	// quotas and no bindings, so nothing it could find is ever in want.
+	labels := map[string]string{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: name}
+	quota := &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "compute", Namespace: "team-b", Labels: labels},
+		Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+			corev1.ResourcePods: resource.MustParse("5"),
+		}},
+	}
+	binding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "k8sc-elsewhere", Namespace: "team-b", Labels: labels},
+		RoleRef:    rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: "view"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(mns, quota, binding).
+		WithStatusSubresource(mns).Build()
+	r := &ManagedNamespaceReconciler{Client: cl}
+	ctx := context.Background()
+
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(quota), &corev1.ResourceQuota{}); err != nil {
+		t.Errorf("resource quota in another namespace was pruned: %v", err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); err != nil {
+		t.Errorf("role binding in another namespace was pruned: %v", err)
+	}
+
+	// Deletion runs the finalizer instead of the prunes, and it lists with no
+	// want set at all, so it needs the same scoping.
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(mns), mns); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Delete(ctx, mns); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(mns)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cl.Get(ctx, client.ObjectKeyFromObject(binding), &rbacv1.RoleBinding{}); err != nil {
+		t.Errorf("role binding in another namespace was finalized: %v", err)
+	}
+}

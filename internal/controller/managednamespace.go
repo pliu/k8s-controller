@@ -81,7 +81,7 @@ func (r *ManagedNamespaceReconciler) Reconcile(ctx context.Context, q ctrl.Reque
 // grant permanently.
 func (r *ManagedNamespaceReconciler) finalizeBindings(ctx context.Context, mns *api.ManagedNamespace) (bool, error) {
 	var list rbacv1.RoleBindingList
-	if e := cleanupReader(r.Client, r.APIReader).List(ctx, &list, r.ownedBy(mns)); e != nil {
+	if e := cleanupReader(r.Client, r.APIReader).List(ctx, &list, r.ownedBy(mns)...); e != nil {
 		return false, e
 	}
 	if len(list.Items) == 0 {
@@ -193,10 +193,12 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 // want == nil (or empty) removes all managed quotas for this name.
 //
 // Matching uses LabelOwnerName, which survives the owner being recreated, so a
-// successor can reclaim or clear quotas left by a previous CR of that name.
+// successor can reclaim or clear quotas left by a previous CR of that name, and
+// is scoped to the managed namespace for the reason ownedBy explains. A quota
+// somewhere else wearing these labels is not this owner's to delete.
 func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.ManagedNamespace, want map[string]bool) error {
 	var list corev1.ResourceQuotaList
-	if e := r.List(ctx, &list, client.MatchingLabels{
+	if e := r.List(ctx, &list, client.InNamespace(mns.Name), client.MatchingLabels{
 		core.LabelManagedBy: core.ManagedBy,
 		core.LabelOwnerName: mns.Name,
 	}); e != nil {
@@ -204,7 +206,7 @@ func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.M
 	}
 	for i := range list.Items {
 		it := &list.Items[i]
-		if it.Namespace != mns.Name || !want[it.Name] {
+		if !want[it.Name] {
 			if e := client.IgnoreNotFound(r.Delete(ctx, it)); e != nil {
 				return e
 			}
@@ -271,7 +273,7 @@ func (r *ManagedNamespaceReconciler) ensureRoleBinding(ctx context.Context, mns 
 // owned bindings.
 func (r *ManagedNamespaceReconciler) pruneBindings(ctx context.Context, mns *api.ManagedNamespace, want map[types.NamespacedName]bool) error {
 	var list rbacv1.RoleBindingList
-	if e := r.List(ctx, &list, r.ownedBy(mns)); e != nil {
+	if e := r.List(ctx, &list, r.ownedBy(mns)...); e != nil {
 		return e
 	}
 	for i := range list.Items {
@@ -313,8 +315,18 @@ func (r *ManagedNamespaceReconciler) status(ctx context.Context, mns *api.Manage
 // recreated under that name adopts the bindings its predecessor left behind.
 // Keyed on anything narrower, every binding the successor no longer wants
 // would stay invisible to the prune, live and unreferenced.
-func (r *ManagedNamespaceReconciler) ownedBy(mns *api.ManagedNamespace) client.MatchingLabels {
-	return client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: mns.Name}
+//
+// The namespace is part of the selector because the owner labels are ordinary
+// labels, settable by anyone who can write a RoleBinding. Without it the prune
+// lists every namespace, finds nothing its want set can match out there, and
+// deletes a stranger's binding on the strength of a label that binding's own
+// author chose. Generated bindings only ever live in the managed namespace, so
+// scoping the query narrows the blast radius without narrowing what is adopted.
+func (r *ManagedNamespaceReconciler) ownedBy(mns *api.ManagedNamespace) []client.ListOption {
+	return []client.ListOption{
+		client.InNamespace(mns.Name),
+		client.MatchingLabels{core.LabelManagedBy: core.ManagedBy, core.LabelOwnerName: mns.Name},
+	}
 }
 
 func (r *ManagedNamespaceReconciler) all(ctx context.Context, _ client.Object) []reconcile.Request {
