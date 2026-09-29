@@ -15,7 +15,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
@@ -46,7 +45,7 @@ func main() {
 	if serverEnabled {
 		metricsAddr = "0"
 	}
-	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: !*noLeaderElect, LeaderElectionID: "k8s-controller.k8s.pliu.dev", HealthProbeBindAddress: ":8081", Cache: cache.Options{SyncPeriod: syncPeriod}, Metrics: metricsserver.Options{BindAddress: metricsAddr}})
+	mgr, e := ctrl.NewManager(cfg, ctrl.Options{Scheme: scheme, LeaderElection: !*noLeaderElect, LeaderElectionID: "k8s-controller.k8s.pliu.dev", Cache: cache.Options{SyncPeriod: syncPeriod}, Metrics: metricsserver.Options{BindAddress: metricsAddr}})
 	if e != nil {
 		panic(e)
 	}
@@ -65,8 +64,6 @@ func main() {
 			panic(e)
 		}
 	}
-	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
 	if e = mgr.Start(ctx); e != nil {
 		panic(e)
 	}

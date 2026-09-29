@@ -26,7 +26,6 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	// The shared controller-runtime registry means this one endpoint serves the
 	// reconciler metrics and the HTTP metrics from the same process.
 	m.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry, promhttp.HandlerOpts{}))

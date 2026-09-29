@@ -45,7 +45,7 @@ func instrument(next http.Handler) http.Handler {
 		next.ServeHTTP(rec, r)
 		path := r.URL.Path
 		switch path {
-		case "/livez", "/metrics", "/api/v1/managednamespaces", "/api/v1/clusteraccessmappings":
+		case "/metrics", "/api/v1/managednamespaces", "/api/v1/clusteraccessmappings":
 		default:
 			path = "static"
 		}

@@ -62,7 +62,6 @@ kubectl -n k8s-controller run api-client --image=curlimages/curl:8.12.1 \
   --restart=Never --command -- sleep 300
 kubectl -n k8s-controller wait --for=condition=Ready pod/api-client --timeout=120s
 api_url=http://k8s-controller
-kubectl -n k8s-controller exec api-client -- curl -fsS "$api_url/livez" >/dev/null
 
 # Both endpoints are served from a watch-fed cache rather than a live LIST, so
 # assert real data comes back and not just that the route answers.
@@ -82,7 +81,6 @@ kubectl -n k8s-controller exec api-client -- \
 metrics=""
 for server_ip in $(kubectl -n k8s-controller get pod -l app=k8s-controller \
   -o jsonpath='{range .items[*]}{.status.podIP}{"\n"}{end}'); do
-  kubectl -n k8s-controller exec api-client -- curl -fsS "http://$server_ip:8080/livez" >/dev/null
   metrics+=$(kubectl -n k8s-controller exec api-client -- curl -fsS "http://$server_ip:8080/metrics")
 done
 grep -q controller_runtime_reconcile_total <<<"$metrics"

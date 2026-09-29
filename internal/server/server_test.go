@@ -13,7 +13,6 @@ func TestStaticRoutes(t *testing.T) {
 		{"/", "k8s-controller", "text/html"},
 		{"/app.css", ".tabs", "text/css"},
 		{"/app.js", "managednamespaces", "javascript"},
-		{"/livez", "ok", ""},
 		// Served from the shared controller-runtime registry: earlier requests in
 		// this test must already appear as HTTP series. (The go/process and
 		// reconciler series come from packages linked into the real binary.)
