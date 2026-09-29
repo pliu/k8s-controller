@@ -14,10 +14,29 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 const finalizerRetryAfter = time.Second
+
+func logResourceChange(ctx context.Context, result controllerutil.OperationResult, kind, namespace, name, ownerKind, ownerName string) {
+	var action string
+	switch result {
+	case controllerutil.OperationResultCreated:
+		action = "Created"
+	case controllerutil.OperationResultUpdated:
+		action = "Updated"
+	default:
+		return
+	}
+	log.FromContext(ctx).Info(action+" resource", "kind", kind, "namespace", namespace, "name", name, "ownerKind", ownerKind, "ownerName", ownerName)
+}
+
+func logResourceDeleted(ctx context.Context, kind, namespace, name, ownerKind, ownerName string) {
+	log.FromContext(ctx).Info("Deleted resource", "kind", kind, "namespace", namespace, "name", name, "ownerKind", ownerKind, "ownerName", ownerName)
+}
 
 // Helpers shared by the ManagedNamespace and ClusterAccessMapping reconcilers,
 // which both turn an AccessMapping's subject set into owned bindings.

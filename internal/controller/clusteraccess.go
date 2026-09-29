@@ -83,8 +83,12 @@ func (r *ClusterAccessReconciler) finalizeBindings(ctx context.Context, cam *api
 		if !list.Items[i].DeletionTimestamp.IsZero() {
 			continue
 		}
-		if e := client.IgnoreNotFound(r.CachedClient.Delete(ctx, &list.Items[i])); e != nil {
-			return false, e
+		if e := r.CachedClient.Delete(ctx, &list.Items[i]); e != nil {
+			if !apierrors.IsNotFound(e) {
+				return false, e
+			}
+		} else {
+			logResourceDeleted(ctx, "ClusterRoleBinding", "", list.Items[i].Name, "ClusterAccessMapping", cam.Name)
 		}
 	}
 	return false, nil
@@ -135,14 +139,18 @@ func (r *ClusterAccessReconciler) ensure(ctx context.Context, cam *api.ClusterAc
 		if e = r.CachedClient.Delete(ctx, obj); e != nil {
 			return e
 		}
+		logResourceDeleted(ctx, "ClusterRoleBinding", "", obj.Name, "ClusterAccessMapping", cam.Name)
 		obj = &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name}}
 	}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, obj, func() error {
+	result, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, obj, func() error {
 		obj.Labels = ownerLabels(cam.Name)
 		obj.RoleRef = want
 		obj.Subjects = subjects
 		return nil
 	})
+	if e == nil {
+		logResourceChange(ctx, result, "ClusterRoleBinding", "", obj.Name, "ClusterAccessMapping", cam.Name)
+	}
 	return e
 }
 
@@ -161,8 +169,12 @@ func (r *ClusterAccessReconciler) prune(ctx context.Context, cam *api.ClusterAcc
 	}
 	for i := range list.Items {
 		if want == nil || !want[list.Items[i].Name] {
-			if e := client.IgnoreNotFound(r.CachedClient.Delete(ctx, &list.Items[i])); e != nil {
-				return e
+			if e := r.CachedClient.Delete(ctx, &list.Items[i]); e != nil {
+				if !apierrors.IsNotFound(e) {
+					return e
+				}
+			} else {
+				logResourceDeleted(ctx, "ClusterRoleBinding", "", list.Items[i].Name, "ClusterAccessMapping", cam.Name)
 			}
 		}
 	}

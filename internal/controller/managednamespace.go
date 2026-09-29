@@ -92,8 +92,12 @@ func (r *ManagedNamespaceReconciler) finalizeBindings(ctx context.Context, mns *
 		if !list.Items[i].DeletionTimestamp.IsZero() {
 			continue
 		}
-		if e := client.IgnoreNotFound(r.CachedClient.Delete(ctx, &list.Items[i])); e != nil {
-			return false, e
+		if e := r.CachedClient.Delete(ctx, &list.Items[i]); e != nil {
+			if !apierrors.IsNotFound(e) {
+				return false, e
+			}
+		} else {
+			logResourceDeleted(ctx, "RoleBinding", list.Items[i].Namespace, list.Items[i].Name, "ManagedNamespace", mns.Name)
 		}
 	}
 	return false, nil
@@ -128,7 +132,7 @@ func (r *ManagedNamespaceReconciler) sync(ctx context.Context, mns *api.ManagedN
 
 func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *api.ManagedNamespace) error {
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: mns.Name}}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, ns, func() error {
+	result, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, ns, func() error {
 		previous, e := namespaceMetadataInventory(ns)
 		if e != nil {
 			return e
@@ -167,6 +171,9 @@ func (r *ManagedNamespaceReconciler) ensureNamespace(ctx context.Context, mns *a
 		ns.Annotations[core.AnnotationManagedMetadata] = string(data)
 		return nil
 	})
+	if e == nil {
+		logResourceChange(ctx, result, "Namespace", "", ns.Name, "ManagedNamespace", mns.Name)
+	}
 	return e
 }
 
@@ -197,13 +204,15 @@ func (r *ManagedNamespaceReconciler) reconcileQuota(ctx context.Context, mns *ap
 		}
 		want[q.Name] = true
 		rq := &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: q.Name, Namespace: mns.Name}}
-		if _, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, rq, func() error {
+		result, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, rq, func() error {
 			rq.Labels = ownerLabels(mns.Name)
 			q.ResourceQuotaSpec.DeepCopyInto(&rq.Spec)
 			return nil
-		}); e != nil {
+		})
+		if e != nil {
 			return e
 		}
+		logResourceChange(ctx, result, "ResourceQuota", rq.Namespace, rq.Name, "ManagedNamespace", mns.Name)
 	}
 	return r.pruneQuotas(ctx, mns, want)
 }
@@ -226,8 +235,12 @@ func (r *ManagedNamespaceReconciler) pruneQuotas(ctx context.Context, mns *api.M
 	for i := range list.Items {
 		it := &list.Items[i]
 		if !want[it.Name] {
-			if e := client.IgnoreNotFound(r.CachedClient.Delete(ctx, it)); e != nil {
-				return e
+			if e := r.CachedClient.Delete(ctx, it); e != nil {
+				if !apierrors.IsNotFound(e) {
+					return e
+				}
+			} else {
+				logResourceDeleted(ctx, "ResourceQuota", it.Namespace, it.Name, "ManagedNamespace", mns.Name)
 			}
 		}
 	}
@@ -288,14 +301,18 @@ func (r *ManagedNamespaceReconciler) ensureRoleBinding(ctx context.Context, mns 
 		if e = r.CachedClient.Delete(ctx, obj); e != nil {
 			return e
 		}
+		logResourceDeleted(ctx, "RoleBinding", obj.Namespace, obj.Name, "ManagedNamespace", mns.Name)
 		obj = &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: mns.Name}}
 	}
-	_, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, obj, func() error {
+	result, e := controllerutil.CreateOrUpdate(ctx, r.CachedClient, obj, func() error {
 		obj.Labels = ownerLabels(mns.Name)
 		obj.RoleRef = want
 		obj.Subjects = subjects
 		return nil
 	})
+	if e == nil {
+		logResourceChange(ctx, result, "RoleBinding", obj.Namespace, obj.Name, "ManagedNamespace", mns.Name)
+	}
 	return e
 }
 
@@ -308,8 +325,12 @@ func (r *ManagedNamespaceReconciler) pruneBindings(ctx context.Context, mns *api
 	}
 	for i := range list.Items {
 		if want == nil || !want[client.ObjectKeyFromObject(&list.Items[i])] {
-			if e := client.IgnoreNotFound(r.CachedClient.Delete(ctx, &list.Items[i])); e != nil {
-				return e
+			if e := r.CachedClient.Delete(ctx, &list.Items[i]); e != nil {
+				if !apierrors.IsNotFound(e) {
+					return e
+				}
+			} else {
+				logResourceDeleted(ctx, "RoleBinding", list.Items[i].Namespace, list.Items[i].Name, "ManagedNamespace", mns.Name)
 			}
 		}
 	}
